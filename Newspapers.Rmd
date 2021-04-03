@@ -1,0 +1,253 @@
+---
+title: "Newspapers"
+author: "Larry Liu"
+date: "10/8/2020"
+output: pdf_document
+---
+# LexisNexisTools
+https://github.com/JBGruber/LexisNexisTools 
+# split corpus
+https://stackoverflow.com/questions/30901834/splitting-a-document-from-a-tm-corpus-into-multiple-documents
+# extract string between two strings
+https://stackoverflow.com/questions/39086400/extracting-a-string-between-other-two-strings-in-r
+# regular expression
+https://rstudio.com/wp-content/uploads/2016/09/RegExCheatsheet.pdf
+# stminsights outputs stm via ggplot2
+https://cran.r-project.org/web/packages/stminsights/stminsights.pdf
+
+```{r, message=FALSE, warning=FALSE}
+library(readtext)
+library(quanteda)
+library(LexisNexisTools)
+library(qdapRegex)
+library(stringr)
+library(stm)
+library(wordcloud)
+library(dplyr)
+library(stminsights)
+library(ggplot2)
+library(gridExtra)
+```
+
+```{r}
+##traditional readtext way: neglect
+setwd("/Volumes/LARRYLIU/iclouddrive/AutomationDiscourseProject")
+wd<-"/Volumes/LARRYLIU/iclouddrive/AutomationDiscourseProject/NYTarticles"
+nyt1<-readtext(paste0(wd, "/*"))
+```
+
+```{r}
+##LexisNexisTools package: https://github.com/JBGruber/LexisNexisTools
+wdnyt_combined<-"/Volumes/LARRYLIU/iclouddrive/AutomationDiscourseProject/NYT_combined"
+nytlnt<-lnt_read(x=wdnyt_combined, start_keyword="^Publication title: ",
+                    end_keyword = "^Subject: ",
+                    length_keyword = "^Links: ")
+##examine metadata
+metanytlnt<-nytlnt@meta
+head(metanytlnt, n=3)
+##examine paragraphs
+paranytlnt<-nytlnt@paragraphs
+head(paranytlnt, n=3)
+##meta_articles_df <- lnt_convert(LNToutput, to = "data.frame")
+meta_text<-lnt_convert(nytlnt, to="data.frame")
+##save it
+save(meta_text, file="NYT.RData")
+##filter out observations with Year=NA
+#https://github.com/bstewart/stm/issues/144
+#df %>% filter(!is.na(a))
+meta_textyear<-meta_text%>%
+  filter(!is.na(Date))
+meta_textyear$Year<-format(as.Date(meta_textyear$Date, 
+                                   format="%b %d, %Y"), 
+                                   "%Y")
+meta_textyear<-meta_textyear%>%
+  filter(!is.na(Year))
+##convert to quanteda corpus
+#nytquant<-lnt_convert(nytlnt, to="quanteda")
+nytcorpus<-corpus(meta_text, docid_field="ID", text_field = "Article")
+docvars(nytcorpus)
+docvars(nytcorpus, "Title")<-str_match(nytcorpus$Headline, 
+                                "Title:\\s*(.*?)\\s*Abstract:")[,2]
+docvars(nytcorpus, "Date1")<-as.Date(nytcorpus$Date, format="%b %d, %Y")
+docvars(nytcorpus, "Year")<-format(as.Date(nytcorpus$Date, format="%b %d, %Y"), 
+                                   "%Y")
+
+##create dfm
+dfm_nytcorpus<-texts(nytcorpus)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("Full text: "), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  tokens_select(names(data_int_syllables))%>%
+  dfm(verbose=T)
+dfm_nyt<-dfm_trim(dfm_nytcorpus, min_docfreq=0.01, max_docfreq=0.8, 
+                  docfreq_type="prop", verbose=TRUE)
+```
+
+##Fit STM, correlated
+
+```{r}
+##add covariates to dfm
+docvars(dfm_nyt, "Title")<-nytcorpus$Title
+docvars(dfm_nyt, "Date")<-nytcorpus$Date1
+docvars(dfm_nyt, "Year")<-nytcorpus$Year
+
+##fit topic model
+stm_fit25base<-stm(dfm_nyt, K=25, init.type = "Spectral",
+               max.em.its=500, reportevery = 50L, emtol = 0.00001,
+               verbose=T)
+##Print labels
+labelTopics(stm_fit25base)
+##plot labels
+plot(stm_fit25base, type="summary")
+##print cloud for topic 18: Amazon robots
+cloud(stm_fit25base, topic=18, max.words=50)
+##print topic 11: driverless cars/ trucks
+cloud(stm_fit25base, topic=11, max.words=50)
+##print topic 1: unions, work
+cloud(stm_fit25base, topic=1, max.words=50)
+##print topic 21: worker, unemployed
+cloud(stm_fit25base, topic=21, max.words=50)
+##print topic 12: car manufacturing
+cloud(stm_fit25base, topic=12, max.words=50)
+```
+
+## Fit STM with covariates
+
+```{r}
+##second corpus with year=NA filtered out
+nytcorpus1<-corpus(meta_textyear, docid_field="ID", text_field = "Article")
+#docvars(nytcorpus1)
+docvars(nytcorpus1, "Title")<-str_match(nytcorpus1$Headline, 
+                                "Title:\\s*(.*?)\\s*Abstract:")[,2]
+docvars(nytcorpus1, "Date1")<-as.Date(nytcorpus1$Date, format="%b %d, %Y")
+docvars(nytcorpus1, "Year")<-format(as.Date(nytcorpus1$Date, format="%b %d, %Y"), 
+                                   "%Y")
+
+##create dfm
+dfm_nytcorpus1<-texts(nytcorpus1)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("Full text: "), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  tokens_select(names(data_int_syllables))%>%
+  dfm(verbose=T)
+dfm_nyt1<-dfm_trim(dfm_nytcorpus1, min_docfreq=0.01, max_docfreq=0.8, 
+                  docfreq_type="prop", verbose=TRUE)
+
+##add covariates to dfm
+docvars(dfm_nyt1, "Title")<-nytcorpus1$Title
+docvars(dfm_nyt1, "Date")<-nytcorpus1$Date1
+docvars(dfm_nyt1, "Year")<-as.numeric(nytcorpus1$Year)
+##convert to stm_dfm
+stm_nyt<-convert(dfm_nyt1, to="stm")
+
+##fit stm with year covariate
+stm_fit25cov<-stm(stm_nyt$documents,
+                  stm_nyt$vocab,
+                  prevalence = ~Year,
+                  K=25, data=stm_nyt$meta,
+                  init.type="Spectral",
+                  max.em.its = 500,
+                  reportevery = 50L,
+                  emtol=0.00001,
+                  verbose=TRUE)
+
+##print label
+labelTopics(stm_fit25cov, topics=c(1,10,11,14,17,20,24))
+labelTopics(stm_fit25cov)
+#plot(stm_fit30cov, type="summary", topics = c(1:15))
+plot(stm_fit25cov, type="summary")
+#thoughts3 <- findThoughts(poliblogPrevFit, texts = shortdoc,
+#+ n = 2, topics = 3)$docs[[1]]
+short_text<-sapply(nytcorpus1, str_trunc, 1000)
+##findthoughts: print topic text
+findThoughts(stm_fit25cov, texts=short_text, n=5, topics=1)
+
+##year effect
+stm_year<-estimateEffect(c(1:25)~Year,
+                            stm_fit25cov,
+                            meta=stm_nyt$meta,
+                            uncertainty="Global")
+plot.estimateEffect(stm_year,
+                    covariate="Year",
+                    topics=c(10),
+                    model=stm_fit25cov,
+                    method="continuous",
+                    verbose.labels = F,
+                    labeltype="frex")
+
+##topic correlation
+topiccorr<-topicCorr(stm_fit25cov)
+plot.topicCorr(topiccorr, topics=c(1,11,17))#declining topics
+plot.topicCorr(topiccorr, topics=c(10,14,20,24))#rising topics
+plot.topicCorr(topiccorr, topics=c(1,10,11,14,17,20,24))#all reported
+```
+
+```{r}
+##alternative graphing: https://cran.r-project.org/web/packages/stminsights/stminsights.pdf
+yeareffect<-get_effects(estimates=stm_year,
+                        variable='Year',
+                        type='continuous')
+
+top1<-yeareffect%>%filter(topic==1)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Robot/Machine')
+top10<-yeareffect%>%filter(topic==10)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Self-driving truck/car')
+top11<-yeareffect%>%filter(topic==11)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Car manufacturing')
+top14<-yeareffect%>%filter(topic==14)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Sillicon Valley')
+top17<-yeareffect%>%filter(topic==17)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Union, contract, strike')
+top20<-yeareffect%>%filter(topic==20)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Job, women, children')
+top24<-yeareffect%>%filter(topic==24)%>%
+  ggplot(aes(x=value, y=proportion))+
+  geom_smooth()+
+  geom_errorbar(aes(ymin=lower, ymax=upper), width = 0.1, size = 0.1)+
+  theme_light() + labs(x = 'Year', y = 'TP: Workers, unemployed')
+grid.arrange(top1, top10, top11, top14, nrow=2,
+             top="Topic proportions in New York Times")
+grid.arrange(top17, top20, top24, nrow=2)
+```
+
+```{r}
+##Diagnostics using searchK: how many topics to choose
+kresult<-searchK(stm_nyt$documents,
+                  stm_nyt$vocab,
+                  prevalence = ~Year,
+                  K=c(5,15,25,35,45), data=stm_nyt$meta,
+                  verbose=FALSE)
+##plot
+par(mfrow=c (4,2))
+par(mar = rep (2, 4))
+plot(kresult)
+```
+

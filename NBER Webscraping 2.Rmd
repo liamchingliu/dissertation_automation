@@ -1,0 +1,2088 @@
+---
+title: "NBER Webscraping"
+output: pdf_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(stringr)
+library(readtext)
+library(xml2)
+library(rvest)
+library(utils)
+library(readtext)
+library(dplyr)
+library(quanteda)
+library(ggplot2)
+library(rsvd)
+library(reshape2)
+library(stm)
+library(tm)
+library(gsubfn)
+library(splitstackshape)
+
+setwd("/Volumes/LARRYLIU/iclouddrive/AutomationDiscourseProject")
+```
+
+##1: Function to get paper links
+
+```{r}
+getPaperLinks<-function(nber_url){
+  links<-read_html(nber_url)%>%
+    html_nodes(xpath='//*[@id="mainContentTd"]/table[1]')%>%
+    html_nodes("a")%>%
+    html_attr("href")
+  return(links)
+}
+```
+
+##2: Assign the URL links and extract the links
+
+```{r}
+##current files as of March 21, 2019
+urls<-list("https://www.nber.org/papersbyprog/LS.html",
+           "https://www.nber.org/papersbyprog/LS_archive.html")
+paper.links<-unlist(sapply(urls, getPaperLinks))
+```
+
+##3: Function for NBER metadata
+
+```{r}
+##load library again
+library(stringr)
+
+##create metadata function
+getNberPaperInfo<-function(url){
+  tryCatch(
+    {
+      page<-read_html(url)
+      title<-page%>%
+        html_nodes(xpath='//*[@class="title citation_title"]')%>%
+        html_text()
+      authors<-page%>%
+        html_nodes(xpath='//*[@class="bibtop citation_author"]')%>%
+        html_text()
+      bibinfo<-page%>%
+        html_nodes(xpath='//*[@class="bibtop"]')%>%
+        html_nodes("b")%>%
+        html_text()
+      paper_number<-str_extract(bibinfo[1], "\\d+")
+      year<-str_extract(bibinfo[2],"\\d\\d\\d\\d")
+      abstract<-page%>%
+        html_nodes("p")%>%
+        html_nodes(xpath='//*[@style="margin-left: 40px; margin-right: 40px; text-align: justify"]')%>%
+        html_text()
+      abstract<-str_flatten(abstract, collapse=" ")
+      if(length(abstract)==0){abstract<-NA}
+      pdflink<-page%>%
+        html_nodes(xpath='//*[@class="bibformatsicons"]')%>%
+        html_nodes("a")%>%
+        html_attr("href")
+      pdflink<-pdflink[1]
+      if(length(pdflink)==0){pdflink<-NA}
+      paper<-data.frame(url=url,
+                        title=title,
+                        authors=authors,
+                        paper_number=paper_number,
+                        issued=bibinfo[2],
+                        nber_programs=bibinfo[3],
+                        year=year,
+                        abstract=abstract,
+                        pdflink=pdflink)
+      return(paper)
+    },#error
+    error=function(error_message){
+      message("ERROR!")
+      message(url)
+      message("Below is the error message from R:")
+      message(error_message)
+      failure<-data.frame(url=url,
+                          title=NA,
+                          authors=NA,
+                          paper_number=NA,
+                          issued=NA,
+                          nber_programs=NA,
+                          year=NA,
+                          abstract=NA,
+                          pdflink=NA)
+      return(failure)
+    }
+  )
+}
+```
+
+##4: Implement getNberPaperInfo function and extract paper info
+
+```{r}
+papers<-list()
+progression<-txtProgressBar(title="Progress bar", min=0,
+                            max=5083, width=100, style=3)
+
+##for loop to get paper info
+for (i in 1:length(paper.links)){
+  paper<-getNberPaperInfo(paper.links[i])
+  papers<-append(papers, list(paper))
+  setTxtProgressBar(progression, i)
+}
+
+##combine results into dataframe
+papers<-do.call(rbind, papers)
+
+##convert link to character and id variable
+papers$pdflink<-as.character(papers$pdflink)
+papers$idx<-1:nrow(papers)
+write.csv(papers, "papers.csv")
+
+```
+
+##5: Download the pdfs
+
+```{r}
+##load papers file
+papers<-read.csv("papers.csv")
+
+##progress bar
+progression<-txtProgressBar(title="Progress bar", min=0,
+                            max=5083, width=100, style=3)
+
+##create folder for pdf files
+if(dir.exists("pdfs/")==F){dir.create("pdfs/")}
+
+##download pdf with forloop
+for(i in 1:nrow(papers)){
+  pdflink<-papers$pdflink[i]
+  pdfname<-tail(str_split(pdflink, "/")[[1]], n=1)
+  unique_idx<-papers$idx[i]
+  destination<-paste0("pdfs/", unique_idx, "_", pdfname)
+  if(file.exists(destination)==F & is.na(pdflink)==F){
+    download.file(pdflink, destination, mode="wb")
+  }
+  setTxtProgressBar(progression, i)
+}
+```
+
+Readtext: https://cran.r-project.org/web/packages/readtext/vignettes/readtext_vignette.html
+
+##6: Read in pdf file on readtext package
+
+```{r}
+##set folder
+datadirect<-setwd("/Volumes/LARRYLIU/iclouddrive/AutomationDiscourseProject")
+
+##apply readtext
+readpdf<-readtext(paste0(datadirect, "/pdfs/*.pdf"),
+                  docvarsfrom="filenames",
+                  docvarnames=c("idx", "workingpapernr"),
+                  sep="_")
+
+##remove \n string
+readpdf$text<-str_replace_all(readpdf$text, "[\r\n]", " ")
+```
+
+##7: Merge readpdf and papers
+
+```{r}
+##create doc_id in papers
+papers$pdfname2<-substring(papers$pdfnames, regexpr("/", papers$pdfnames)+1)
+papers$doc_id<-paste0(papers$idx, papers$pdfname2)
+
+##create firstauthor variable
+papers$firstauthor<-gsub(',.*', '', papers$authors)
+
+##subset the readpdf df
+readpdf1<-select(readpdf, doc_id, text)
+
+##merge: left_join for papers
+papers2<-left_join(papers, readpdf1, by=c("doc_id", "doc_id"))
+
+##store as dataframe, download when restarting
+save(papers2, file="papers2.RData")
+```
+
+##8: convert to corpus using quanteda
+
+```{r}
+load("papers2.RData")
+##convert to corpus
+nbercorpus<-corpus(papers2,
+                   text_field="text",
+                   docid_field = "doc_id")
+                   
+metanbercorpus<-metacorpus(nbercorpus)
+
+##find the number of tokens by year
+yeartoken<-ntoken(texts(nbercorpus, group="year"))
+```
+
+##9: Keywords in Context using kwic: 
+automation, technology, robot, AI, artificial intelligence, machine
+cannot open compressed file, probable reason 'No such file or directory'Error in gzfile(file, "wb") : cannot open the connection
+```{r}
+##automat*
+#n=3746
+kwicauto<-kwic(tokens(nbercorpus), "automat*", window=5)
+head(kwicauto, 10)
+
+##technolog*
+#n=21600
+kwictech<-kwic(tokens(nbercorpus), "technolog*", window=5)
+head(kwictech, 10)
+
+##robot*
+#N=1867
+kwicrobot<-kwic(tokens(nbercorpus), "robot*", window=5)
+head(kwicrobot, 10)
+
+##AI
+#N=6399
+kwicai<-kwic(tokens(nbercorpus), "ai", window=5)
+head(kwicai, 10)
+
+##artificial intelligence
+#n=0
+kwicartif<-kwic(tokens(nbercorpus), "artificial intelligence", window=5)
+head(kwicartif, 10)
+
+##machine*
+#n=4207
+kwicmachine<-kwic(tokens(nbercorpus), "machine*", window=5)
+head(kwicmachine, 10)
+
+##kwictotal for keyword count
+kwictotal<-c(nrow(kwicauto), nrow(kwictech), nrow(kwicrobot), nrow(kwicai), nrow(kwicmachine))
+keywords<-c("automat*", "technolog*", "robot*", "ai", "machine*")
+kwictotal1<-data.frame(kwictotal, keywords)
+
+##plot keyword count
+ggplot(data=kwictotal1, aes(x=keywords, y=kwictotal))+
+  geom_bar(stat="identity")+
+  theme_bw()+
+  ggtitle("Figure 1: Number of keywords in NBER documents")
+
+##use stringr to extract desired keywords
+##get document variables in dataframe
+nberdocument<-nbercorpus$documents
+
+##pick out the five keywords with stringr's str_count
+nberdocument$automat<-str_count(nberdocument$texts,
+                                pattern='[:space:]automat*')
+nberdocument$technolog<-str_count(nberdocument$texts,
+                                  pattern='[:space:]technolog*')
+nberdocument$robot<-str_count(nberdocument$texts,
+                              pattern='[:space:]robot*')
+nberdocument$ai<-str_count(nberdocument$texts,
+                           pattern='[:space:]ai[:space:]')
+nberdocument$machine<-str_count(nberdocument$texts,
+                                pattern='[:space:]machine*')
+
+##put them in a nice dataframe
+nbergrouped<-nberdocument%>%group_by(year)%>%
+  summarize(automat=sum(automat),
+            technolog=sum(technolog),
+            robot=sum(robot),
+            ai=sum(ai),
+            machine=sum(machine))%>%
+  ungroup()%>%
+  filter(!is.na(year) & year<2019)
+##graph five keywords by year: After next section
+  
+```
+
+##Plot tokens
+
+```{r}
+##create summary
+tokensummary<-summary(nbercorpus, n=5083)
+
+##store as dataframe
+tokensummary<-as.data.frame(tokensummary)
+
+##extract sum of tokens by year
+yeartotal<-tokensummary%>%
+  select(year, Tokens)%>%
+  group_by(year)%>%
+  summarize(Tokens=sum(Tokens))%>%
+  ungroup()%>%
+  filter(!is.na(year) & year<2019)#2019 only has 3 months of data
+
+yeartotal19<-tokensummary%>%
+  select(year, Tokens)%>%
+  group_by(year)%>%
+  summarize(Tokens=sum(Tokens))%>%
+  ungroup()
+
+##plot
+ggplot(data=yeartotal, aes(x=year, y=Tokens, group=1))+
+  geom_line()+
+  geom_point()+
+  scale_x_continuous(labels=c(seq(1973, 2019, 4)), breaks=c(seq(1973, 2019, 4)))+
+  theme_bw()+
+  ggtitle("Figure 2: Token count in NBER papers by Year")
+```
+
+##Plot keywords
+
+```{r}
+##plot the five keywords: raw count
+nbergroupedsub<-melt(nbergrouped, id=c("year"))
+ggplot(data=nbergroupedsub)+
+  geom_line(aes(x=year, y=value, color=variable))+
+  scale_x_continuous(labels=c(seq(1973, 2019, 4)), 
+                     breaks=c(seq(1973, 2019, 4)))+
+  theme_bw()+
+  ggtitle("Number of mentions of automation keywords, 1973-2018")+
+  ylab("number of mentions")+
+  scale_color_manual("",values=c('red','blue','green','yellow', 'black'),
+                     labels=c("automat*", "technolog*", "robot*",
+                              "ai", "machine*"))+
+  theme(legend.position=c(0.15, 0.7))
+
+##plot the five keywords: count/tokens
+nbergrouped1<-left_join(nbergrouped, yeartotal, by=c("year", "year"))
+nbergrouped1<-nbergrouped1%>%
+  mutate(automatp=(automat/Tokens)*100,#percentage of tokens with automation
+         technologp=(technolog/Tokens)*100,
+         robotp=(robot/Tokens)*100,
+         aip=(ai/Tokens)*100,
+         machinep=(machine/Tokens)*100)
+nbergrouped2<-nbergrouped1[,c(1,8:12)]
+nbergrouped2<-melt(nbergrouped2, id=c("year"))
+
+ggplot(data=nbergrouped2)+
+  geom_line(aes(x=year, y=value, color=variable))+
+  scale_x_continuous(labels=c(seq(1973, 2019, 4)), 
+                     breaks=c(seq(1973, 2019, 4)))+
+  theme_bw()+
+  ggtitle("Percentage of mentions of automation keywords, 1973-2018")+
+  ylab('percentage (p) of mentions')+
+  scale_color_manual("",values=c('red','blue','green','yellow', 'black'),
+                     labels=c("automat*", "technolog*", "robot*",
+                              "ai", "machine*"))+
+  theme(legend.position=c(0.15, 0.7))
+```
+
+##9: Create document-feature matrix
+https://www.regular-expressions.info/refcharacters.html 
+```{r}
+##Document-feature matrix
+#data_int_syllables in 
+#https://stackoverflow.com/questions/44307896/remove-meaningless-words-from-corpus-in-r
+dfm_nber<-texts(nbercorpus)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  tokens_select(names(data_int_syllables))%>%
+  dfm(verbose=T)
+
+##remove features that occur in less than 1% of documents
+dfm_nber<-dfm_trim(dfm_nber, min_docfreq=0.01, max_docfreq=0.8, docfreq_type="prop", verbose=TRUE)
+
+##svd reduce dimensionality
+dfm_nbersvd<-rsvd(dfm_nber, 150)
+dfm_nberre<-dfm_nbersvd$u%*%diag(dfm_nbersvd$d)
+
+####k-means clustering
+kmeans.results.20<-kmeans(dfm_nberre, centers=20, nstart=5)
+```
+
+
+##Labeling clusters with Fighting Words
+
+```{r}
+# dfm -- a quanteda document-term object
+# clust.vect -- a boolean vector the same length of dfm, where TRUE indicates a member of the focal cluster
+# alpha.0 -- the strength of the prior, expressed as number of terms per sub-corpus 
+clusterFightinWords <- function(dfm, clust.vect, alpha.0=500) {
+  # we need to get the overall corpus word distribution and the cluster-specific words dists
+  # y_{kw} in Monroe et al. 
+  overall.terms <- colSums(dfm)
+  # n and n_k in Monroe et al. 
+  n <- sum(overall.terms)
+  # alpha_{kw} in Monroe et al. 
+  prior.terms <- overall.terms / n * alpha.0
+  # y_{kw}(i) in Monroe et al.
+  cluster.terms <- colSums(dfm[clust.vect, ])
+  # n_k(i) in Monroe et al.
+  cluster.n <- sum(cluster.terms)
+  
+  cluster.term.odds <- 
+    (cluster.terms + prior.terms) / 
+      (cluster.n + alpha.0 - cluster.terms - prior.terms)
+  overall.term.odds <- 
+    (overall.terms + prior.terms) / 
+      (n + alpha.0 - overall.terms - prior.terms)
+  
+  # usually, we'd hate to blindly log something, but as long as we have a non-zero prior, 
+  # these will both be non-zero.  
+  log.odds <- log(cluster.term.odds) - log(overall.term.odds)
+  
+  variance <- 1/(cluster.terms + prior.terms) + 1/(overall.terms + prior.terms)
+  
+  # return the variance weighted log-odds for each term
+  return(log.odds / sqrt(variance))
+}
+
+# dfm -- a quanteda document-term object
+# results -- a k-means results object
+# n.terms -- the number of terms to include in the label
+clusterLabels <- function(dfm, results, n.terms=20) {
+  clusters <- length(results$withinss)
+  labels <- rep("", clusters)
+  for (clust.num in 1:clusters) {   
+    clust.vect <- results$cluster==clust.num
+    terms <- clusterFightinWords(dfm, clust.vect)
+    terms <- order(terms, decreasing = T)[1:n.terms]
+    # use the terms as indices on the features list of the dfm
+    labels[clust.num] <- paste(colnames(dfm)[terms], collapse=", ")
+  }
+  return(labels)
+}
+
+# In case we want to print tidy versions of the labels.  
+# I don't use this here, but sprintf() is super useful to know.
+printLabels <- function(labels, results){
+  for (clust.num in length(labels)) {
+    # sprintf() is a little wonky, but a super powerful tool for formatting your text output
+    cat(sprintf("%2i) %5.0f Members | %s", 
+                  clust.num, 
+                  sum(results$cluster==clust.num),
+                  labels[clust.num] 
+          )
+    )
+  }
+}
+```
+Implement
+```{r}
+##get the clustering
+clusterlabel<-clusterLabels(dfm=dfm_nber, results=kmeans.results.20)
+
+##word cloud for first cluster
+textplot_wordcloud(dfm_nber[kmeans.results.20$cluster==1,], max_words=50,
+                   color="black")
+
+##visualizing clusters with covariates of interest
+labels<-paste(1:20, "-", clusterLabels(dfm_nber, kmeans.results.20, 10))
+label.df<-data.frame(cluster=1:length(labels), cluster.name=labels)
+```
+
+
+##Fit LDA Topic Model
+
+```{r}
+##LDA with 10 topics
+ldafit10<-stm(dfm_nber, K=10, init.type="LDA")
+##LDA with 20 topics
+ldafit20<-stm(dfm_nber, K=20, init.type="LDA")
+```
+
+##Fit Correlated Topic Model
+
+```{r}
+##convert quanteda to stm format
+stm_dfm<-convert(dfm_nber, to="stm")
+
+set.seed(1234)
+##fit 20 topics
+stm_fit20<-stm(stm_dfm$documents, stm_dfm$vocab, K=20, init.type = "Spectral",
+               max.em.its = 500, reportevery = 50L, emtol = 0.00001, verbose=T)
+##print the labels
+labelTopics(stm_fit20)
+##plot the labels
+plot(stm_fit20, type="summary",
+     main="20 Topic Models of NBER Labor Studies Articles, N=5,083")
+##print topic 7 cloud
+cloud(stm_fit20, topic=7, max.words = 50)
+```
+
+##Fit STM with covariates
+
+```{r}
+##add covariates to dfm_nber
+docvars(dfm_nber, "year")<-nbercorpus$year
+docvars(dfm_nber, "firstauthor")<-nbercorpus$firstauthor
+docvars(dfm_nber, "texts")<-texts(nbercorpus)
+
+##convert quanteda dfm to conform to stm
+stm_dfm1<-convert(dfm_nber, to="stm")
+
+##fit stm with covariates
+stm_fit30cov<-stm(stm_dfm1$documents,
+                  stm_dfm1$vocab,
+                  prevalence = ~ s(year),
+                  K=30,
+                  data=stm_dfm1$meta,
+                  init.type="Spectral",
+                  max.em.its = 500,
+                  reportevery = 50L,
+                  emtol=0.00001,
+                  verbose=TRUE)
+
+##print topic labels
+labelTopics(stm_fit30cov)
+
+##plot topic frequency
+plot(stm_fit30cov, type="summary", topics = c(1:15))
+plot(stm_fit30cov, type="summary", topics = c(16:30))
+plot(stm_fit30cov, type="summary",
+     topics=c(15,1,23,27,2,22,12,28,26,9), 
+     topic.names=c(
+       "Equilibrium, cost function",
+       "Regression function",
+       "Export, tariff, robot",
+       "Education, test scores",
+       "Health, families",
+       "Worker hiring, training",
+       "Survey method, networks",
+       "Minimum wage",
+       "Gender, age",
+       "Immigration"), 
+     custom.labels = c(""),
+     main="30 Topic Model of NBER Labor Studies Papers, N=4,638")
+
+##find short text
+short_text<-sapply(stm_dfm1$meta$texts, str_trunc, 1000)
+findThoughts(stm_fit30cov, 
+             texts=short_text,
+             n=2,
+             topics=9)
+
+##year effects
+year_effect<-estimateEffect(c(1:30)~s(year),
+                            stm_fit30cov,
+                            meta=stm_dfm1$meta,
+                            uncertainty="Global")
+plot.estimateEffect(year_effect,
+                    covariate="year",
+                    topics=c(23),
+                    model=stm_fit30cov,
+                    method="continuous",
+                    verbose.labels = F,
+                    printlegend=F)
+
+##print word clouds for 16 and 17
+cloud(stm_fit30cov, topic=16, max.words=50)
+cloud(stm_fit30cov, topic=17, max.words=50)
+cloud(stm_fit30cov, topic=19, max.words=50)
+cloud(stm_fit30cov, topic=20, max.words=50)
+```
+
+##subset to robot documents
+|\\s+technolog*
+```{r}
+##subset documents with the automation keyword strings in the text
+#https://stackoverflow.com/questions/36200387/subsetting-a-corpus-based-on-content-of-textfile 
+nbercorpusrobot<-corpus_subset(nbercorpus, 
+                   (grepl("\\s+automat*|\\s+robot*|\\s+machine*",
+                                          texts(nbercorpus))))
+
+##create dfm
+#min character length https://stackoverflow.com/questions/54608528/how-to-remove-single-and-double-char-tokens-using-quantedatokens-select 
+dfm_nberrobot<-texts(nbercorpusrobot)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z",
+                  "brie", "silt", "sift", "emit", "ton", "eye", "need", "tea", "tent", "dose", "ted", "eno", "lie", "stab", "even", "taut", "abe", "end", "level", "eau", "ore", "lot", "owl", "neve", "ise", "woo", "hew", "beau", "bed", "pon", "sie", "ais", "oie", "tom", "neil", "sea", "bled", "ion", "flu", "bet", "tag", "flue", "sonic", "won", "pele", "emo", "ora", "ism",
+"bit", "bus", "tol", "bib", "tow", "edi", "sri", "sis", "nil", "bin", "ill", "row", "hid", "quo", "rio","mod", "pow", "jon", "nom", "won", "mol", "sib", "sub", "joo", "mill", "iou", "pip", "air", "ink", "ise", "dot", "boo", "loot", "rol", "tori", "brus", "irk", "mon", "cult",
+"orb", "bit", "asia", "sib", "sin", "sis", "molt", "mod", "sri", "mon", "hub", "end", "nil", "aft", "dim", "sub", "ant", "ono", "thud", "mol", "ban", "thom", "tow", "isa", "ascii", "air", "dime", "mill", "auth", "oct", "oft",
+"jig", "fig", "cou", "sill", "stew", "mod", "pip", "dna", "sic", "bun", "cia", "lug", "aug", "jil", "pom", "quo", "tot", "lot", "sit", "nil", "wal", "hid", "big", "beau", "imo", "bit", "tug", "psi", "sis", "bom", "lath", "flo", "oda", "glo", "saw", "ilg", "jac", "uma", "mob", "fist",
+"bit",  "molt", "edi", "orb",  "nom", "ban",  "bun", "brim", "sill", "rio", "sis", "boo", "nil", "won", "ivo", "bib",  "oat",  "mod", "boot", "flo",  "ono", "moi", "lou", "luo", "fit", "joo", "bel", "sin", "ito", "coo",
+"bit", "sill", "sis", "tail", "emit", "tot",  "tacit", "smooth", "nom", "tow", "bib", "lop", "mill", "aid", "taut", "wen", "saw", "boo", "audi", "won", "pip", "eno", "cult", "nail", "cou", "sub", "coo", "bad", "gnome", "molt", "porn", "sri", "llama", "siew", "stab", "high", "bail", "lath", "smit",
+"aug", "bit", "edi", "lop", "sib", "wig",  "ban", "sic", "bug", "spa", "gig", "tacit", "sin", "oat", "net", "lot", "qua", "exit", "taut", "boa", "elam", "mote", "nom", "tot", "ate",  "coil", "aid", "lath", "pou", "glow", "ant", "won", "tag", "bib", "ian", "rib", "bow",
+"sill", "sib",  "bit", "sis", "edi", "sub", "emil", "molt", "won", "oat", "dot", "nom", "Isa", "suit", "need", "non", "eno", "boo", "sri", "mon", "som", "luo", "ise", "air", "lath", "woll", "auth", "lull", "bun", "emo", "bile", "sin", "bib", "rio", "eli",
+ "orb", "bit", "molt", "rio", "won", "ivo",  "nil", "bib", "mod", "lie",  "rib", "fit", "flo", "ono", "dol", "will", "oro", "eli", "ole", "nom", "irit", "mon", "lop", "brus", "sid", "lieb", "tow", "woll", "bed", "wal", "old", "wei", "lull",
+"lop", "mol", "mag", "aol", "pit", "big", "dot", "old", "cow", "tot", "cou", "tom", "mitt", "bit", "glow", "jug", "lope", "bel", "roa", "glo", "gig", "wow", "gag", "pop", "ore", "joo", "lug", "ora", "mgm", "rod", "pea", "pig", "bet", "mae", "ola", "tae", "con", "imo", "one", "tor",
+"bit", "nom", "air", "oat", "woll", "oil", "boo", "moll", "evil", "rye", "smog", "bin", "pol", "mail", "bui", "lid", "iwo", "mit", "ano", "inch", "cull", "mono", "bum", "aoi", "bull", "limit", "nib", "ash", "bite", "ron", "hoy", "bis", "ion", "lob", "rud", "lisi", "tho", "sup", "sil", "bob", "fil", "boon", "mac", "silo", "slab", "oui",
+"bit", "rigid",  "bin", "hub", "mood", "last", "old", "las", "oath", "pol", "toy", "item", "ion", "ano", "ron", "loll", "tub", "anti", "ball", "tod", "ado", "nova", "air", "atom", "toll", "comb", "nam", "bite", "novo", "woll","tie", "huh", "shill", "slab", "otto", "stow", "mit", "null", "ilk", "moti", "boil", "lid", "inch", "bid",
+"dai", "tan", "lag", "file", "gil", "ais", "eco", "tee", "lila", "vie", "tao", "box", "ire", "pate", "fag", "oss", "wop", "jot", "hui", "wan", "pic", "lee", "orn", "lilac", "bic", "ace", "woke", "aer", "sot", "por", "tai","hoc", "oar", "rao", "iie", "tod", "ala", "hot", "tal", "cea", "ewe", "mete", "coat", "vee", "rep", "awb",
+"arc", "bodi", "bell", "tip", "ann", "ill", "raw", "may", "six", "tile", "wait", "thi", "will", "bend", "nay", "comic", "doi", "basi", "put", "tic", "aim", "arid", "morn", "word", "sure", "etc", "joe", "noth", "soon", "stall", "lit", "hut", "ida", "uni", "dud"), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  tokens_select(names(data_int_syllables))%>%
+  tokens_select(min_nchar = 3L)%>%
+  dfm(verbose=T)
+
+##remove features that occur in less than 1% of documents
+dfm_nberrobot<-dfm_trim(dfm_nberrobot, min_docfreq=0.01, max_docfreq=0.8, docfreq_type="prop", verbose=TRUE)
+
+##add docvars
+docvars(dfm_nberrobot, "year")<-nbercorpusrobot$documents$year
+docvars(dfm_nberrobot, "firstauthor")<-nbercorpusrobot$documents$firstauthor
+docvars(dfm_nberrobot, "texts")<-nbercorpusrobot$documents$texts
+
+##convert quanteda dfm to conform to stm
+stm_dfmrobot<-convert(dfm_nberrobot, to="stm")
+
+##fit stm with covariates
+stm_fit30robot<-stm(stm_dfmrobot$documents,
+                  stm_dfmrobot$vocab,
+                  prevalence = ~ firstauthor+s(year),
+                  K=30,
+                  data=stm_dfmrobot$meta,
+                  init.type="Spectral",
+                  max.em.its = 500,
+                  reportevery = 50L,
+                  emtol=0.00001,
+                  gamma.prior="L1",
+                  verbose=TRUE)
+
+##print topic labels
+labelTopics(stm_fit30robot)
+
+##plot topic frequency
+plot(stm_fit30robot, type="summary", topics = c(1:15))
+plot(stm_fit30robot, type="summary", topics = c(16:30))
+plot(stm_fit30robot, type="summary", topics = c(12,13,18,19,29))
+
+##keyword in context
+silt<-kwic(tokens(nbercorpusrobot), "silt", window=5)
+head(silt, 10)
+
+##year effects
+year_effectrob<-estimateEffect(c(1:30)~s(year),
+                            stm_fit30robot,
+                            meta=stm_dfmrobot$meta,
+                            uncertainty="Global")
+plot.estimateEffect(year_effectrob,
+                    covariate="year",
+                    topics=c(12,13,18,19,29),
+                    model=stm_fit30robot,
+                    method="continuous",
+                    verbose.labels = F)
+
+##first author effects
+firstauthor_effectrob<-estimateEffect(c(1:30)~firstauthor,
+                            stm_fit30robot,
+                            meta=stm_dfmrobot$meta,
+                            uncertainty="Global")
+#create labels
+firstlabs<-labelTopics(stm_fit30robot, n=5)$frex
+firstlabs<-apply(firstlabs, 1, paste, collapse=",")
+#plot
+plot.estimateEffect(firstauthor_effectrob,
+                    covariate="firstauthor",
+                    topics=c(12),
+                    model=stm_fit30robot,
+                    method="pointestimate",
+                    verbose.labels = F,
+                    main=firstlabs[12],
+                    custom.labels=levels(stm_dfmrobot$meta$firstauthor))
+
+##print word clouds for the 5 topics
+cloud(stm_fit30robot, topic=12, max.words=50)
+cloud(stm_fit30robot, topic=13, max.words=50)
+cloud(stm_fit30robot, topic=18, max.words=50)
+cloud(stm_fit30robot, topic=19, max.words=50)
+cloud(stm_fit30robot, topic=29, max.words=50)
+##next TASK: filter to the 15 observations of firstauthor with highest topic prevalence
+```
+
+https://quanteda.io/articles/quickstart.html 
+
+Produce graph for keywords by year DONE
+Create document-feature matrix DONE
+Run STM by year DONE
+Present words most associated with topic/ wordclouds DONE
+Subset to documents with the keywords DONE
+Run another STM by year/ author DONE
+Present words most associated with topic/ wordclouds ABANDON
+
+When having different actors, run STM by actor and year
+
+##Automation Abstracts
+
+For this analysis, we restrict to the working paper nrs that the NBER website search retrieves from "automation". There are 70 search results as of 7/17/2019
+https://admin.nber.org/xsearch?q=%22automation%22&whichsearch=ftpub&restrict_papers=yes&fullresults=1&datefilter=&b=search+again
+26070
+
+```{r}
+##build function to get paperlinks from searchresult
+searchlinks<-function(page){
+  link<-read_html(page)%>%
+    html_nodes("ul")%>%
+    html_nodes("a")%>%
+    html_attr("href")
+  fulllink<-paste0("https://www.nber.org", link)
+  return(fulllink)
+}
+
+##get all the paperlinks
+nberurl<-"https://admin.nber.org/xsearch?q=%22automation%22&whichsearch=ftpub&restrict_papers=yes&fullresults=1&datefilter=&b=search+again"
+searchnr<-c(20,40,60,80,100,120,140,160,180,200,220)
+searchnr1<-"&offset="
+nberallurl<-paste0(nberurl, searchnr1, searchnr)
+nberallurl<-append(nberurl, nberallurl)
+##Forloop to get all paperlinks
+searchlinks1<-c()
+for (paperlink in nberallurl){
+  nberlinks<-searchlinks(paperlink)
+  searchlinks1<-append(searchlinks1, nberlinks)
+}
+
+##get the paperinfo
+nberpapers<-list()
+##for loop to get paper info
+for (i in 1:length(searchlinks1)){
+  paper<-getNberPaperInfo(searchlinks1[i])
+  nberpapers<-append(nberpapers, list(paper))
+}
+
+##combine results into dataframe
+nberpapers<-do.call(rbind, nberpapers)
+
+##convert link to character and id variable
+nberpapers$pdflink<-as.character(nberpapers$pdflink)
+nberpapers$idx<-1:nrow(nberpapers)
+
+##create firstauthor variable
+nberpapers$firstauthor<-gsub(',.*', '', nberpapers$authors)
+
+##paper nr: filter to only the number
+nberpapers$paper_number<-gsub("[^\\d]+", "", nberpapers$paper_number, perl=TRUE)
+##export file
+write.csv(nberpapers, "nberpapers.csv")
+```
+
+```{r}
+##load the papers again, updated to 7/17/2019
+nberpapers<-read.csv("nberpapers.csv")
+
+##David H. Author and David Autor are the same people
+nberpapers$firstauthor[nberpapers$firstauthor=="David H. Autor"]<-"David Autor"
+nberpapers$authors<-gsub(pattern="David H. Autor", replacement="David Autor", nberpapers$authors)
+
+##find out which first author writes most automation-related articles
+firstauthorcount<-nberpapers%>%count(firstauthor)%>%arrange(desc(n))
+#Autor, Acemoglu and Popp dominate as first authors
+
+##all authors count, i.e. not just first authors
+##split author variable by comma
+#https://stackoverflow.com/questions/31577423/r-split-variable-column-into-multiple-unbalanced-columns-by-comma
+nberpapers<-cSplit(nberpapers, "authors", sep=", ")
+#has to be character vector/ remove NA
+authors_1<-as.character(nberpapers$authors_1)
+authors_2<-as.character(nberpapers$authors_2)
+authors_2<-authors_2[!is.na(authors_2)]
+authors_3<-as.character(nberpapers$authors_3)
+authors_3<-authors_3[!is.na(authors_3)]
+authors_4<-as.character(nberpapers$authors_4)
+authors_4<-authors_4[!is.na(authors_4)]
+authors_5<-as.character(nberpapers$authors_5)
+authors_5<-authors_5[!is.na(authors_5)]
+
+##characterfunction for next time
+characterfun<-function(input){
+  input1<-as.character(input)
+  input2<-input1[!is.na(input1)]
+  return(input2)
+}
+##a long vector
+nberauthors<-data.frame(authors=c(authors_1,
+              authors_2,
+              authors_3,
+              authors_4,
+              authors_5))
+nberauthorscount<-nberauthors%>%count(authors)%>%arrange(desc(n))
+#Autor, Dorn and Goldfarb lead the list
+
+##convert to corpus
+#doc_id=paper_number
+#text=abstract
+nberpapers<-data.frame(nberpapers, stringsAsFactors = FALSE)
+#only character vector as text
+nberpapers<-nberpapers%>%
+  mutate(text=as.character(abstract),
+         doc_id=as.character(paper_number))
+#omit observations with NA in text
+nberpapers<-nberpapers[!is.na(nberpapers$text),]
+
+##create new doc_id1
+nberpapers<-nberpapers%>%
+  mutate(doc_id1=unlist(str_extract_all(string=url, pattern="[0-9]+")))
+
+#eliminate duplicate texts
+nberpapers<-nberpapers[!duplicated(nberpapers[,c("doc_id1", "text")]),]
+
+#convert to corpus
+nbercorpusauto<-corpus(nberpapers,
+                   text_field= "text",
+                   docid_field = "doc_id1")
+metanbercorpusauto<-metacorpus(nbercorpusauto)
+
+##document-feature matrix
+dfm_nberauto<-texts(nbercorpusauto)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  dfm(verbose=T)
+
+##remove features that occur in less than 1% of documents
+dfm_nberauto<-dfm_trim(dfm_nberauto, min_docfreq=0.01, max_docfreq=0.8, docfreq_type="prop", verbose=TRUE)
+
+##convert quanteda to stm format
+stm_dfmauto<-convert(dfm_nberauto, to="stm")
+
+##fit 20 topics: correlated stm
+stm_fit20auto<-stm(stm_dfmauto$documents, stm_dfmauto$vocab, K=20, 
+               init.type = "Spectral",
+               max.em.its = 500, reportevery = 50L, emtol = 0.00001, verbose=T)
+##print the labels
+labelTopics(stm_fit20auto, topics=12)
+##plot the labels
+plot(stm_fit20auto, type="summary", n=5)
+##print topic 7 cloud
+cloud(stm_fit20auto, topic=10, max.words = 50)
+#the main theme is focused on wages, skills, polarization, low-skilled work
+##find thoughts prints the topic texts
+findThoughts(stm_fit20auto,
+             texts=nbercorpusauto$documents$texts,
+             topics=12,
+             n=1)
+
+##STM with Year as covariate
+
+##add covariates to dfm_nber
+docvars(dfm_nberauto, "year")<-nbercorpusauto$year
+docvars(dfm_nberauto, "texts")<-nbercorpusauto$texts
+
+##convert quanteda dfm to conform to stm
+stm_dfmauto<-convert(dfm_nberauto, to="stm")
+
+##fit stm with covariates
+stm_fit20covauto<-stm(stm_dfmauto$documents,
+                  stm_dfmauto$vocab,
+                  prevalence = ~ year,
+                  K=20,
+                  data=stm_dfmauto$meta,
+                  init.type="Spectral",
+                  max.em.its = 500,
+                  reportevery = 50L,
+                  emtol=0.00001,
+                  verbose=TRUE)
+
+##print topic labels
+labelTopics(stm_fit20covauto)
+
+##plot topic frequency
+plot(stm_fit20covauto, type="summary", topics = c(18,16,10,9,7,5,1,3,4,2),
+     topic.names = c("Occupational task change",
+                     "Capital/ labor income share",
+                     "Artificial Intelligence",
+                     "Innovation/ competition",
+                     "Firm/industry innovation",
+                     "Optimal taxes",
+                     "Labor market",
+                     "Economic growth",
+                     "Electricity/semiconductors",
+                     "Federal government legislation"),
+     custom.labels = c(""),
+     main="20 Topic Model of NBER Abstracts Automation, N=236")
+
+
+##find short text
+findThoughts(stm_fit20covauto, 
+             texts=nbercorpusauto,
+             n=3,
+             topics=10)
+
+##year effects
+year_effectauto<-estimateEffect(c(1:20)~s(year),
+                            stm_fit20covauto,
+                            meta=stm_dfmauto$meta,
+                            uncertainty="Global")
+plot.estimateEffect(year_effectauto,
+                    covariate="year",
+                    topics=c(18,16,10),
+                    model=stm_fit20covauto,
+                    method="continuous",
+                    verbose.labels = F,
+                    labeltype="score",
+                    n=3,
+                    xlim=c(2010, 2020))
+
+##print number of papers by year
+nberpapersyear<-as.data.frame(table(nberpapers$year))
+nberpapersyear$Var1<-as.numeric(as.character(nberpapersyear$Var1))
+ggplot(data=nberpapersyear,
+       aes(x=Var1, y=Freq, group=1))+
+  geom_point()+
+  geom_line()+
+  scale_x_continuous(labels=c(seq(1973, 2019, 4)), 
+                     breaks=c(seq(1973, 2019, 4)))+
+  theme_bw()+
+  ylab("Nr of Automation Papers in NBER")+
+  xlab("")+
+  ggtitle("Number of Automation Papers in NBER, 1973-July 2019")
+  
+```
+
+##Comparison to Labor Studies Abstract
+
+```{r}
+##create firstauthor variable
+papers$firstauthor<-gsub(',.*', '', papers$authors)
+
+##paper nr: filter to only the number
+papers$paper_number<-gsub("[^\\d]+", "", papers$paper_number, perl=TRUE)
+
+##firstauthor total number
+paperfirstauthor<-papers%>%count(firstauthor)%>%arrange(desc(n))
+
+##allauthors
+papers<-cSplit(papers, "authors", sep=", ")
+#has to be character vector/ remove NA
+authors_1p<-as.character(papers$authors_01)
+authors_2p<-characterfun(papers$authors_02)
+authors_3p<-characterfun(papers$authors_03)
+authors_4p<-characterfun(papers$authors_04)
+authors_5p<-characterfun(papers$authors_05)
+authors_6p<-characterfun(papers$authors_06)
+authors_7p<-characterfun(papers$authors_07)
+authors_8p<-characterfun(papers$authors_08)
+authors_9p<-characterfun(papers$authors_09)
+authors_10p<-characterfun(papers$authors_10)
+
+##a long vector
+authors<-data.frame(authors=c(authors_1p,
+              authors_2p,
+              authors_3p,
+              authors_4p,
+              authors_5p, authors_6p, authors_7p, authors_8p, 
+              authors_9p, authors_10p))
+authorscount<-authors%>%count(authors)%>%arrange(desc(n))
+
+##convert to corpus
+#doc_id=paper_number
+#text=abstract
+papers<-data.frame(papers, stringsAsFactors = FALSE)
+#only character vector as text
+papers<-papers%>%
+  mutate(text=as.character(abstract),
+         doc_id=as.character(paper_number))
+#omit observations with NA in text
+papers<-papers[!is.na(papers$text),]
+papers<-papers[!duplicated(papers[,c("doc_id")]),]
+
+#convert to corpus
+corpusauto<-corpus(papers,
+                   text_field= "text",
+                   docid_field = "doc_id")
+metacorpusauto<-metacorpus(corpusauto)
+
+##document-feature matrix
+dfm_auto<-texts(corpusauto)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  dfm(verbose=T)
+
+##remove features that occur in less than 1% of documents
+dfm_auto<-dfm_trim(dfm_auto, min_docfreq=0.01, max_docfreq=0.8, docfreq_type="prop", verbose=TRUE)
+
+##convert quanteda to stm format
+stm_dfmauto1<-convert(dfm_auto, to="stm")
+
+##fit 20 topics: correlated stm
+stm_fit20auto1<-stm(stm_dfmauto1$documents, stm_dfmauto1$vocab, K=20, 
+               init.type = "Spectral",
+               max.em.its = 500, reportevery = 50L, emtol = 0.00001, verbose=T)
+##print the labels
+labelTopics(stm_fit20auto1)
+##plot the labels
+plot(stm_fit20auto1, type="summary", n=5)
+##print topic 7 cloud
+cloud(stm_fit20auto1, topic=17, max.words = 50)
+#the main themes are statistical/methodological, research, but topic 17 is most closely related to skill, technology
+
+##add covariates to dfm_nber
+docvars(dfm_auto, "year")<-corpusauto$year
+docvars(dfm_auto, "texts")<-texts(corpusauto)
+
+##convert quanteda dfm to conform to stm
+stm_dfmauto1<-convert(dfm_auto, to="stm")
+
+##fit stm with covariates
+stm_fit20covauto1<-stm(stm_dfmauto1$documents,
+                  stm_dfmauto1$vocab,
+                  prevalence = ~ s(year),
+                  K=20,
+                  data=stm_dfmauto1$meta,
+                  init.type="Spectral",
+                  max.em.its = 500,
+                  reportevery = 50L,
+                  emtol=0.00001,
+                  verbose=TRUE)
+
+##print topic labels
+labelTopics(stm_fit20covauto1)
+
+##plot topic frequency
+plot(stm_fit20covauto1, type="summary", 
+     main="20 Topic Model of NBER Abstracts Labor Studies, N=5,150",
+     topics=c(15,1,18,8,17,12,10,7,3,9),
+     custom.labels=c("Treatment effect, IV, Bias",
+                     "Equilibrium, efficiency",
+                     "Law, crime",
+                     "Economic literature",
+                     "Technology, trade, skill",
+                     "Student, test score",
+                     "Labor market, hiring, job loss",
+                     "CEO, incentive, performance",
+                     "Health insurance, children",
+                     "Household income, inequality"))
+
+##find short text
+findThoughts(stm_fit20covauto1, 
+             texts=corpusauto$documents$texts,
+             n=1,
+             topics=11)
+
+##year effects
+year_effectauto1<-estimateEffect(c(1:20)~s(year),
+                            stm_fit20covauto1,
+                            meta=stm_dfmauto1$meta,
+                            uncertainty="Global")
+plot.estimateEffect(year_effectauto1,
+                    covariate="year",
+                    topics=c(17),
+                    model=stm_fit20covauto1,
+                    method="continuous",
+                    verbose.labels = F,
+                    labeltype="score",
+                    n=3)
+
+##print number of publications by year
+paperyear<-as.data.frame(table(papers$year))
+paperyear$Var1<-as.numeric(as.character(paperyear$Var1))
+paperyear$type<-"Labor Studies"
+nberpapersyear$type<-"Automation"
+ggplot(data=paperyear,
+       aes(x=Var1, y=Freq, group=1, color=type))+
+  geom_point()+
+  geom_line()+
+  geom_point(data=nberpapersyear, aes(x=Var1, y=Freq, group=2, color=type))+
+  geom_line(data=nberpapersyear, aes(x=Var1, y=Freq, group=2, color=type))+
+  scale_x_continuous(labels=c(seq(1973, 2019, 4)), 
+                     breaks=c(seq(1973, 2019, 4)))+
+  theme_bw()+
+  ylab("Nr of Papers in NBER")+
+  xlab("")+
+  ggtitle("Number of NBER Papers by Type, 1973-July 2019")
+```
+
+
+##Presidential documents
+
+https://www.archives.gov/presidential-libraries/archived-websites
+https://clintonwhitehouse6.archives.gov/
+
+```{r}
+##list of url links
+start_date<-as.Date("1993-01-01")
+end_date<-as.Date("2001-01-01")
+dates<-gsub(pattern="-", replacement="/",
+            substr(seq.Date(start_date, end_date, by="month"), 1,8))
+##create the big list
+clintonurls<-paste0("https://clintonwhitehouse6.archives.gov/", dates)
+
+##function for getting paperlinks
+getPaperLinksClinton<-function(clinton_url){
+  Sys.sleep(0.5)
+  links<-read_html(clinton_url)%>%
+    html_nodes('body dir a')%>%
+    html_attr("href")
+  linkpaste<-paste0(clinton_url, links)
+  return(linkpaste)
+}
+
+##get the urls
+linkvector<-unlist(lapply(clintonurls, getPaperLinksClinton))
+linkvector<-linkvector[-7273]#non-functioning link
+linkvector<-linkvector[-16572]
+linkvector<-linkvector[-16572]
+
+##function for getting text
+#extract substring: https://stackoverflow.com/questions/17215789/extract-a-substring-in-r-according-to-a-pattern
+getText<-function(page){
+  Sys.sleep(0.5)
+  paras<-read_html(page)%>%
+  html_nodes("p")%>%
+  html_text
+  #remove whitespace/ internal line break
+  clean<-trimws(gsub(pattern="\r\n", replacement = " ", paras))
+  cleantext<-paste0(clean, collapse="\n\n ")
+  date<-strapplyc(page, "\\d+-\\d+-\\d+", simplify=TRUE)
+  title<-sub("https://clintonwhitehouse6.archives.gov/","",page)
+  title1<-gsub("\\d+/\\d+/\\d+-\\d+-\\d+-","",title)
+  title2<-gsub(".html","",title1)
+  title3<-gsub("-", " ", title2)
+  thetext<-data.frame(text=cleantext,
+                      date=date,
+                      title=title3)
+  return(thetext)
+}
+
+##see whether function works for one document
+textone<-getText(linkvector[5323])
+
+##try on firsttext
+linkvectorsub<-linkvector[1:5000]
+##container
+firsttext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub){
+  textone <- getText(eachlink)
+  firsttext <- rbind(firsttext, textone)
+}
+
+##try on secondtext
+linkvectorsub1<-linkvector[5001:7000]
+##container
+secondtext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub1){
+  texttwo <- getText(eachlink)
+  secondtext <- rbind(secondtext, texttwo)
+}
+
+##try on thirdtext
+linkvectorsub2<-linkvector[7001:9000]
+##container
+thirdtext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub2){
+  textthree <- getText(eachlink)
+  thirdtext <- rbind(thirdtext, textthree)
+}
+
+
+##try on fourthtext
+linkvectorsub3<-linkvector[9001:12000]
+##container
+fourthtext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub3){
+  textfour <- getText(eachlink)
+  fourthtext <- rbind(fourthtext, textfour)
+}
+
+##try on fifthtext
+linkvectorsub4<-linkvector[12001:15000]
+##container
+fifthtext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub4){
+  textfive <- getText(eachlink)
+  fifthtext <- rbind(fifthtext, textfive)
+}
+
+
+##try on sixthtext
+linkvectorsub5<-linkvector[15001:18000]
+##container
+sixthtext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub5){
+  textsix <- getText(eachlink)
+  sixthtext <- rbind(sixthtext, textsix)
+}
+
+##try on seventhtext
+linkvectorsub6<-linkvector[18001:20008]
+##container
+seventhtext<- data.frame()
+##forloop to apply getText function
+for(eachlink in linkvectorsub6){
+  textseven <- getText(eachlink)
+  seventhtext <- rbind(seventhtext, textseven)
+}
+
+
+##merge all texts
+alltexts<-do.call("rbind", list(firsttext, secondtext, thirdtext,
+                                fourthtext, fifthtext, sixthtext,
+                                seventhtext))
+save(alltexts, file="clintondata.RData")
+```
+
+Bush Speeches
+```{r}
+##list of url links
+bushstart<-as.Date("2001-01-01")
+bushend<-as.Date("2009-01-01")
+bushdates<-gsub(pattern="-", replacement="/",
+            substr(seq.Date(bushstart, bushend, by="month"), 1,7))
+##create the big list
+bushurls<-paste0("https://georgewbush-whitehouse.archives.gov/news/releases/", bushdates)
+bushrooturl<-"https://georgewbush-whitehouse.archives.gov"
+
+##function for getting paperlinks
+#removing items from list https://stackoverflow.com/questions/652136/how-can-i-remove-an-element-from-a-list 
+getPaperLinksBush<-function(bush_url){
+  Sys.sleep(0.5)
+  links<-read_html(bush_url)%>%
+    html_nodes('div [id="news_container"] table')%>%
+    html_nodes("a")%>%
+    html_attr("href")
+  linkpaste<-paste0(bushrooturl, links)
+  return(linkpaste[-c(1:3)])#first three observations are navigation links
+}
+
+##try on first link
+bushlinkone<-getPaperLinksBush(bushurls[10])
+unwanted<-c("video", "images", "infocus", "es.html", ".ram", "usbudget/blueprint", "v.smil", "v.rm", "a.rm", "reports/", ".pdf", "budget/")#4 non-useful strings filtered out
+bushlinkone1<-bushlinkone[-grep(paste(unwanted,collapse="|"), bushlinkone)]
+
+##get the urls
+linkvectorbush<-unlist(lapply(bushurls, getPaperLinksBush))
+linkvectorbush<-linkvectorbush[-grep(paste(unwanted,collapse="|"), linkvectorbush)]
+
+##gettext function
+#https://stat.ethz.ch/pipermail/r-help/2010-January/223306.html
+#convert factor to character https://stackoverflow.com/questions/2851015/convert-data-frame-columns-from-factors-to-characters 
+getTextBush<-function(page){
+  Sys.sleep(0.5)
+  paras<-read_html(page)%>%
+    html_nodes("p")%>%
+    html_text
+  #remove whitespace/ internal line break
+  clean<-trimws(gsub(pattern="\r\n", replacement = " ", paras))
+  clean1<-gsub(pattern="\n", replacement=" \n ", clean)
+  cleantext<-paste0(clean1, collapse="\n\n ")
+  date<-strapply(cleantext, "([A-Z][a-z]+\\s\\d{1,2}\\,\\s\\d{4}).*")[[1]]
+  title<-strsplit(cleantext, "\n")[[1]][5]
+  title2<-read_html(page)%>%
+    html_nodes("p")%>%
+    html_nodes("b")%>%
+    html_text
+  finaldata<-data.frame(text=cleantext,
+                        date=date,
+                        title=title2)
+  #finaldata<-data.frame(lapply(finaldata, as.character), 
+                        #stringsAsFactors = FALSE)
+  return(finaldata)
+}
+
+##apply to first text
+firsttextbush<-getTextBush(linkvectorbush[46])
+#exdate<-strapply(firsttextbush$text, "([A-Z][a-z]+\\s\\d{1,2}\\,\\s\\d{4}).*")[[1]]
+#extitle<-strsplit(firsttextbush$text, "\n")[[1]][5]
+secondtextbush<-getTextBush(linkvectorbush[5346])
+combinedbush<-rbind(firsttextbush, secondtextbush)
+
+##create forloop to extract text
+#forloop tryCatch https://rsangole.netlify.com/post/try-catch/
+bushone<-data.frame()
+linkvectorbush1<-linkvectorbush[1:3000]
+for(eachlink in linkvectorbush1){
+ tryCatch(
+  expr = {
+       bushtext1<-getTextBush(eachlink)
+       bushone<-rbind(bushone, bushtext1)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##second batch
+bushtwo<-data.frame()
+linkvectorbush2<-linkvectorbush[3001:6000]
+for(eachlink in linkvectorbush2){
+ tryCatch(
+  expr = {
+       bushtext2<-getTextBush(eachlink)
+       bushtwo<-rbind(bushtwo, bushtext2)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##third batch
+bushthree<-data.frame()
+linkvectorbush3<-linkvectorbush[6001:9000]
+for(eachlink in linkvectorbush3){
+ tryCatch(
+  expr = {
+       bushtext3<-getTextBush(eachlink)
+       bushthree<-rbind(bushthree, bushtext3)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##fourth batch
+bushfour<-data.frame()
+linkvectorbush4<-linkvectorbush[9001:12000]
+for(eachlink in linkvectorbush4){
+ tryCatch(
+  expr = {
+       bushtext4<-getTextBush(eachlink)
+       bushfour<-rbind(bushfour, bushtext4)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##fifth batch
+bushfive<-data.frame()
+linkvectorbush5<-linkvectorbush[12001:16438]
+for(eachlink in linkvectorbush5){
+ tryCatch(
+  expr = {
+       bushtext5<-getTextBush(eachlink)
+       bushfive<-rbind(bushfive, bushtext5)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##combine all bush datasets
+bushall<-do.call("rbind", list(bushone, bushtwo, bushthree, bushfour,
+                               bushfive))
+##save bushdata
+save(bushall, file="bushdata.RData")
+```
+
+##Obama White House
+
+```{r}
+##base url
+obamabaseurl<-"https://obamawhitehouse.archives.gov/briefing-room/speeches-and-remarks"
+obamaurl<-"?term_node_tid_depth=31&page="
+obamanrs<-1:472
+
+##combine list function
+#https://stackoverflow.com/questions/36665492/how-to-combine-two-lists-in-r
+combineListsAsOne <-function(list1, list2){
+  n <- c()
+  for(x in list1){
+    n<-c(n, x)
+  }
+  for(y in list2){
+    n<-c(n, y)
+  }
+  return(n)
+}
+
+##createlinks
+obamalinks<-list()
+for(i in obamanrs){
+  obamalink<-paste0(obamabaseurl, obamaurl, i)
+  obamalinks<-combineListsAsOne(obamalinks, obamalink)
+}
+
+##add baseurl to list
+obamalinks<-append(obamabaseurl, obamalinks)
+obamalinks1<-obamalinks[1:422]
+obamalinks2<-obamalinks[422:473]
+obamalink<-obamalinks[422:423]
+
+##try out on one link
+obamaroot<-"https://obamawhitehouse.archives.gov"
+speechlink<-read_html(obamalink[1])%>%
+    html_nodes('div [class="panel-pane pane-views-panes pane-press-office-listings-panel-pane-1"]')%>%
+    html_nodes("a")%>%
+    html_attr("href")
+speechlink1<-paste0(obamaroot, speechlink)
+speechlink2<-speechlink1[1:10]
+
+##for loop: extract the speech links
+obamalinks11<-c()
+for(link in obamalinks1){
+  speechlink<-read_html(link)%>%
+    html_nodes('div [class="panel-pane pane-views-panes pane-press-office-listings-panel-pane-1"]')%>%
+    html_nodes("a")%>%
+    html_attr("href")
+  speechlink1<-paste0(obamaroot, speechlink)
+  speechlink2<-speechlink1[1:10]
+  obamalinks11<-append(obamalinks11, speechlink2)
+}
+
+##repeat for second half of list
+obamalinks22<-c()
+for(link in obamalinks2){
+  speechlink3<-read_html(link)%>%
+    html_nodes('div [class="panel-pane pane-views-panes pane-press-office-listings-panel-pane-1"]')%>%
+    html_nodes("a")%>%
+    html_attr("href")
+  speechlink4<-paste0(obamaroot, speechlink3)
+  speechlink5<-speechlink4[1:10]
+  obamalinks22<-append(obamalinks22, speechlink5)
+}
+obamalinks22<-obamalinks22[1:518]
+
+##function to allow for text collapse
+#function definition
+#https://github.com/tidyverse/rvest/issues/175 
+html_text_collapse <- function(x, trim = FALSE, collapse = "\n"){
+  UseMethod("html_text_collapse")
+}
+html_text_collapse.xml_nodeset <- function(x, trim = FALSE, collapse = "\n"){
+  vapply(x, html_text_collapse.xml_node, character(1), trim = trim, collapse = collapse)
+}
+html_text_collapse.xml_node <- function(x, trim = FALSE, collapse = "\n"){
+  paste(xml2::xml_find_all(x, ".//text()"), collapse = collapse)
+}
+
+##obama getText function
+##1:422
+getTextObama1<-function(page){
+  Sys.sleep(0.5)
+  secondtextobama<-read_html(page)%>%
+    html_nodes('div [id="content-start"]')%>%
+    html_nodes('div [class="field-items"]')%>%
+    html_nodes("p")%>%
+    html_text
+  cleanobama<-trimws(gsub(pattern="\n\t", replacement = "", secondtextobama))
+  cleanobama1<-paste0(cleanobama, collapse="\n\n ")
+  secondtextobamadate<-read_html(page)%>%
+    html_nodes('div [id="press_article_date_created"]')%>%
+    html_text
+  secondtextobamatitle<-read_html(page)%>%
+    html_nodes('div [class="panel-pane pane-node-title"]')%>%
+    html_text
+  secondtextobamatitle1<-trimws(gsub(pattern="\n", replacement="",
+                                     secondtextobamatitle))
+  finaldata<-data.frame(text=cleanobama1,
+                        date=secondtextobamadate,
+                        title=secondtextobamatitle1)
+  return(finaldata)
+}
+
+##422:473
+getTextObama2<-function(page){
+  Sys.sleep(0.5)
+  firsttextobama<-read_html(page)%>%
+    html_nodes('div [id="content-start"]')%>%
+    html_nodes('div [class="legacy-content"]')%>%
+    html_text_collapse
+  firsttextobama1<-trimws(gsub(pattern="\n  \n", replacement="\n\n ",
+                               firsttextobama))
+  firsttextobama2<-trimws(gsub("\n\n\t", "\n ", firsttextobama1))
+  firsttextobama3<-trimws(gsub("\t", "", firsttextobama2))
+  firsttextobamadate<-strapply(firsttextobama, 
+                               "([A-Z][a-z]+\\s\\d{1,2}\\,\\s\\d{4}).*")[[1]]
+  firsttextobamatitle<-read_html(page)%>%
+    html_nodes('div [class="panel-pane pane-node-title"]')%>%
+    html_text
+  firsttextobamatitle1<-trimws(gsub(pattern="\n", replacement="",
+                                    firsttextobamatitle))
+  finaldata<-data.frame(text=firsttextobama3,
+                        date=firsttextobamadate,
+                        title=firsttextobamatitle1)
+  return(finaldata)
+}
+
+
+
+##build the command to be added to function
+obamapage<-"https://obamawhitehouse.archives.gov/the-press-office/remarks-president-consumer-financial-protection"
+obamapage1<-"https://obamawhitehouse.archives.gov/the-press-office/2017/01/06/remarks-president-vox-live-interview"
+
+##type 1: 422:473
+firsttextobama<-read_html(obamapage)%>%
+  html_nodes('div [id="content-start"]')%>%
+  html_nodes('div [class="legacy-content"]')%>%
+  html_text_collapse
+firsttextobama1<-trimws(gsub(pattern="\n  \n", replacement="\n\n ", firsttextobama))
+firsttextobama2<-trimws(gsub("\n\n\t", "\n ", firsttextobama1))
+firsttextobama3<-trimws(gsub("\t", "", firsttextobama2))
+firsttextobamadate<-strapply(firsttextobama, "([A-Z][a-z]+\\s\\d{1,2}\\,\\s\\d{4}).*")[[1]]
+firsttextobamatitle<-read_html(obamapage)%>%
+  html_nodes('div [class="panel-pane pane-node-title"]')%>%
+  html_text
+firsttextobamatitle1<-trimws(gsub(pattern="\n", replacement="", firsttextobamatitle))
+
+##type 2: 1:422
+secondtextobama<-read_html(obamapage1)%>%
+  html_nodes('div [id="content-start"]')%>%
+  html_nodes('div [class="field-items"]')%>%
+  html_nodes("p")%>%
+  html_text
+cleanobama<-trimws(gsub(pattern="\n\t", replacement = "", secondtextobama))
+cleanobama1<-paste0(cleanobama, collapse="\n\n ")
+secondtextobamadate<-read_html(obamapage1)%>%
+  html_nodes('div [id="press_article_date_created"]')%>%
+  html_text
+secondtextobamatitle<-read_html(obamapage1)%>%
+  html_nodes('div [class="panel-pane pane-node-title"]')%>%
+  html_text
+secondtextobamatitle1<-trimws(gsub(pattern="\n", replacement="", secondtextobamatitle))
+
+##implement getText for 1:422
+obamaone<-data.frame()
+obamalinks12<-obamalinks11[1:3000]
+for(eachlink in obamalinks12){
+ tryCatch(
+  expr = {
+       obamatext1<-getTextObama1(eachlink)
+       obamaone<-rbind(obamaone, obamatext1)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+obamatwo<-data.frame()
+obamalinks13<-obamalinks11[3001:4219]
+for(eachlink in obamalinks13){
+ tryCatch(
+  expr = {
+       obamatext2<-getTextObama1(eachlink)
+       obamatwo<-rbind(obamatwo, obamatext2)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##implement getText for 422:473
+obamathree<-data.frame()
+obamalinks221<-obamalinks22[9:520]
+for(eachlink in obamalinks221){
+ tryCatch(
+  expr = {
+       obamatext3<-getTextObama2(eachlink)
+       obamathree<-rbind(obamathree, obamatext3)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##for some links getTextObama1 is better. we manually pick up those links
+obamalinksspec<-
+  c("https://obamawhitehouse.archives.gov/the-press-office/remarks-president-after-cabinet-meeting",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-economy",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-health-care-reform",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-independence-day-celebration",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-lgbt-pride-month-reception",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-naturalization-ceremony-active-duty-service-members",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-business-roundtable",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-barack-obama-ndash-responsibly-ending-war-iraq",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-after-regulatory-reform-meeting",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-barack-obama-address-joint-session-congress",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-and-vice-president-national-governors-association",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-business-council",
+    "https://obamawhitehouse.archives.gov/the-press-office/remarks-president-after-meeting-with-secretary-defense-and-joint-chiefs-staff-12809")
+#now apply
+obamafour<-data.frame()
+for(eachlink in obamalinksspec){
+ tryCatch(
+  expr = {
+       obamatext4<-getTextObama1(eachlink)
+       obamafour<-rbind(obamafour, obamatext4)
+  },
+  error = function(e){
+    print (e)
+    print (eachlink)
+  }
+  )
+}
+
+##combine all obama datasets
+obamaall<-do.call("rbind", list(obamaone, obamatwo, obamathree, obamafour))
+##save bushdata
+save(obamaall, file="obamadata.RData")
+
+```
+
+##Trump administration
+
+```{r}
+##get the basic url
+trumpbaseurl<-"https://trumpwhitehouse.archives.gov/news/page/"
+trumpnr<-1:910
+
+trumplinks<-list()
+for(i in trumpnr){
+  trumplink<-paste0(trumpbaseurl, i, "/")
+  trumplinks<-combineListsAsOne(trumplinks, trumplink)
+}
+
+##get the links
+trumparticlelink<-read_html(trumplinks[20])%>%
+  html_nodes('div [class="page-results__wrap"]')%>%
+  html_nodes('article')%>%
+  html_nodes('a')%>%
+  html_attr("href")
+trumparticlelink1<-trumparticlelink[!grepl("/issues/", trumparticlelink)]
+
+##use for loop to extract all links
+trumplinkvector<-c()
+for (link in trumplinks){
+  trumparticlelink<-read_html(link)%>%
+    html_nodes('div [class="page-results__wrap"]')%>%
+    html_nodes('article')%>%
+    html_nodes('a')%>%
+    html_attr("href")
+  trumparticlelink1<-trumparticlelink[!grepl("/issues/", trumparticlelink)]
+  trumplinkvector<-append(trumplinkvector, trumparticlelink1)
+}#N=9323 filter out "/people/"
+trumplinkvector<-trumplinkvector[!grepl("/people/", trumplinkvector)]
+
+##build text-scraping code
+trumplinkexample<-"https://trumpwhitehouse.archives.gov/presidential-actions/executive-order-revocation-executive-order-13770/"
+trumplinkexample1<-"https://trumpwhitehouse.archives.gov/articles/supreme-court-nominee-amy-coney-barrett-judges-not-policymakers/"
+trumptext<-read_html(trumplinkexample1)%>%
+  html_nodes('div [class="page-content"]')%>%
+  html_nodes('div [class="page-content__content editor"]')%>%
+  html_nodes("p")%>%
+  html_text(trim=TRUE)
+trumptext1<-str_trim(trumptext)
+trumptext1<-paste(trumptext1, collapse="\n\n")
+##title
+trumptitle<-read_html(trumplinkexample1)%>%
+  html_nodes('div [class="page-header__main"]')%>%
+  html_nodes('h1')%>%
+  html_text
+##date
+trumpdate<-read_html(trumplinkexample1)%>%
+  html_nodes('div [class="meta meta--left"]')%>%
+  html_nodes('time')%>%
+  html_text
+trumpdate1<-lubridate::mdy(trumpdate)
+
+##Write textscrape function
+getTextTrump<-function(page){
+  Sys.sleep(0.5)
+  trumptext<-read_html(page)%>%
+    html_nodes('div [class="page-content"]')%>%
+    html_nodes('div [class="page-content__content editor"]')%>%
+    html_nodes("p")%>%
+    html_text(trim=TRUE)
+  trumptext1<-str_trim(trumptext)
+  trumptext1<-paste(trumptext1, collapse="\n\n")
+  ##title
+  trumptitle<-read_html(page)%>%
+    html_nodes('div [class="page-header page-header--small-title"]')%>%
+    html_nodes('h1')%>%
+    html_text
+  trumpdate<-read_html(page)%>%
+    html_nodes('div [class="meta meta--mobile-wrap"]')%>%
+    html_nodes('time')%>%
+    html_text
+  trumpdate1<-lubridate::mdy(trumpdate)
+  trumpdata<-data.frame(text=trumptext1,
+                        date=trumpdate1,
+                        title=trumptitle)
+  return(trumpdata)
+}
+##see whether function works
+trumpspeechexample<-getTextTrump(trumplinkvector[488])#works
+
+##write another textscrape function because html_node varies
+##for date and title
+getTextTrump1<-function(page){
+  Sys.sleep(0.5)
+  trumptext<-read_html(page)%>%
+    html_nodes('div [class="page-content"]')%>%
+    html_nodes('div [class="page-content__content editor"]')%>%
+    html_nodes("p")%>%
+    html_text(trim=TRUE)
+  trumptext1<-str_trim(trumptext)
+  trumptext1<-paste(trumptext1, collapse="\n\n")
+  ##title
+  trumptitle<-read_html(page)%>%
+    html_nodes('div [class="page-header__main"]')%>%
+    html_nodes('h1')%>%
+    html_text
+  trumpdate<-read_html(page)%>%
+    html_nodes('div [class="meta meta--left"]')%>%
+    html_nodes('time')%>%
+    html_text
+  trumpdate1<-lubridate::mdy(trumpdate)
+  trumpdata<-data.frame(text=trumptext1,
+                        date=trumpdate1,
+                        title=trumptitle)
+  return(trumpdata)
+}
+
+##implement gettext function
+trumpdata1<-data.frame()
+for(link in trumplinkvector){
+  tryCatch(
+    expr={
+      trumptextwrap<-getTextTrump(link)
+      trumpdata1<-rbind(trumpdata1, trumptextwrap)
+    },
+    error=function(e){
+      print(e)
+      print(link)
+    }
+  )
+}
+
+##second time
+trumpdata2<-data.frame()
+for(link in trumplinkvector){
+  tryCatch(
+    expr={
+      trumptextwrap2<-getTextTrump1(link)
+      trumpdata2<-rbind(trumpdata2, trumptextwrap2)
+    },
+    error=function(e){
+      print(e)
+      print(link)
+    }
+  )
+}
+
+##combine both data
+trumpdata<-rbind(trumpdata1, trumpdata2)
+##save data
+save(trumpdata, file="trumpdata.RData")
+```
+
+
+##Analyze presidential speeches
+
+```{r}
+##load the data, assign the administration name to them
+clintondata<-get(load("clintondata.RData"))
+clintondata$admin<-"Clinton"
+bushdata<-get(load("bushdata.RData"))
+bushdata$admin<-"Bush"
+obamadata<-get(load("obamadata.RData"))
+obamadata$admin<-"Obama"
+trumpdata<-get(load("trumpdata.RData"))
+trumpdata$admin<-"Trump"
+
+trumpdatadate<-select(trumpdata, date, title)
+sapply(trumpdatadate, function(x) sum(is.na(x)))
+
+##convert to character variables
+clintondata<-clintondata%>%mutate_at(vars(text, title, date), as.character)
+bushdata<-bushdata%>%mutate_at(vars(text, title, date), as.character)
+obamadata<-obamadata%>%mutate_at(vars(text, title, date), as.character)
+
+##convert date from character to date format
+clintondata<-clintondata%>%mutate(date=lubridate::ymd(date))
+bushdata<-bushdata%>%mutate(date=lubridate::mdy(date))
+obamadata<-obamadata%>%mutate(date=lubridate::mdy(date))
+
+##merge the data
+presidentdata<-do.call("rbind", list(clintondata, bushdata, obamadata, trumpdata))
+
+##convert to corpus
+#doc_id=paper_number
+#text=abstract
+presidentdata<-presidentdata%>%
+  mutate(doc_id=1:n(),
+         year=as.numeric(lubridate::year(date)))
+
+##just check that there is no NA in date/title
+presidentdatadate<-select(presidentdata, date, title)
+sapply(presidentdatadate, function(x) sum(is.na(x)))
+
+#omit observations with NA in text
+presidentdata<-presidentdata[!is.na(presidentdata$text),]
+
+##subset to text with string "automation" or "automate*"
+presidentdata1<-presidentdata%>%
+  filter(grepl("automation|automate*", text))
+presidentdata1admin<-presidentdata1$admin
+table(presidentdata1admin)
+presidentdata1short<-sapply(presidentdata1$text, str_trunc, 1000)
+##export presidentdata1
+save(presidentdata1, file="presidentautomation.RData")
+load(file="presidentautomation.RData")
+
+#convert to corpus
+corpuspres<-corpus(presidentdata1,
+                   text_field= "text",
+                   docid_field = "doc_id")
+metacorpuspres<-metacorpus(corpuspres)
+
+##document-feature matrix
+dfm_pres<-texts(corpuspres)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  #tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  dfm(verbose=T)
+
+##remove features that occur in less than 1% of documents
+dfm_pres<-dfm_trim(dfm_pres, min_docfreq=0.01, max_docfreq=0.8, docfreq_type="prop", verbose=TRUE)
+
+##remove docs with zero words
+#findthoughts requires corpus objects to match stmfit objects
+#https://github.com/quanteda/quanteda/issues/1647
+dfm_pressub<-dfm_subset(dfm_pres, ntoken(dfm_pres)>0)
+texts(corpuspres[docnames(dfm_pressub)])
+
+##convert quanteda to stm format
+stm_dfmpres<-convert(dfm_pres, to="stm")
+
+##fit 20 topics: correlated stm
+stm_fit20pres<-stm(stm_dfmpres$documents, stm_dfmpres$vocab, K=20, 
+               init.type = "Spectral",
+               max.em.its = 500, reportevery = 50L, emtol = 0.00001, verbose=T)
+##print the labels
+labelTopics(stm_fit20pres)
+##plot the labels
+plot(stm_fit20pres, type="summary", n=5)
+##print topic 7 cloud
+cloud(stm_fit20pres, topic=18, max.words = 50)
+##presidents don't talk much about technology, but it does appear in topic 20
+findThoughts(stm_fit20pres, topics=18, texts=corpuspres$documents$texts)
+
+##add covariates to dfm_nber
+docvars(dfm_pres, "year")<-corpuspres$year
+docvars(dfm_pres, "admin")<-corpuspres$admin
+docvars(dfm_pres, "texts")<-texts(corpuspres)
+
+##convert quanteda dfm to conform to stm
+stm_dfmpres1<-convert(dfm_pres, to="stm")
+
+##fit stm with covariates
+stm_fit20covpres1<-stm(stm_dfmpres1$documents,
+                  stm_dfmpres1$vocab,
+                  prevalence = ~ year+admin,
+                  K=20,
+                  data=stm_dfmpres1$meta,
+                  init.type="Spectral",
+                  max.em.its = 500,
+                  reportevery = 50L,
+                  emtol=0.00001,
+                  verbose=TRUE)
+
+##print topic labels
+labelTopics(stm_fit20covpres1)
+
+##plot topic frequency
+plot(stm_fit20covpres1, type="summary")
+plot(stm_fit20covpres1, type="summary", topics = c(6,14,19,15,13,2,5,17,20,18),
+     main="20 Topic Model of Presidential Statements Automation, N=1,360",
+     custom.labels = c("National emergency order",
+                       "People, applause",
+                       "Wall Street reform",
+                       "Senior administration official",
+                       "Schools, students",
+                       "Social security pension",
+                       "Guns, law enforcement",
+                       "Iraq, Afghanistan, terrorists",
+                       "IT, technology, fed. agency",
+                       "Coronavirus"))
+
+short_textpres<-sapply(stm_dfmpres1$meta$texts, str_trunc, 1000)
+
+##find short text
+findThoughts(stm_fit20covpres1, 
+             texts=short_textpres,
+             n=10,
+             topics=20)
+
+stm_dfmpres1$meta$admin<-as.factor(stm_dfmpres1$meta$admin)
+##year effects
+year_effectpres1<-estimateEffect(c(1:20)~year+admin,
+                            stm_fit20covpres1,
+                            meta=stm_dfmpres1$meta,
+                            uncertainty="Global")
+plot.estimateEffect(year_effectpres1,
+                    covariate="year",
+                    topics=c(20),
+                    model=stm_fit20covpres1,
+                    method="continuous",
+                    verbose.labels = F,
+                    labeltype="custom",
+                    custom.labels = "IT, Technology, Fed agency",
+                    n=3,
+                    xlim=c(1993, 2021),
+                    ylim=c(0.00,0.12))
+
+##for the title in next graph
+frexlab<-labelTopics(stm_fit20covpres1, n=3)$frex
+frexlab <- apply(frexlab, 1, paste, collapse=":")
+
+##plot pointestimate
+plot.estimateEffect(year_effectpres1,
+                    covariate="admin",
+                    topics=20,
+                    model=stm_fit20covpres1,
+                    method="pointestimate",
+                    verbose.labels = FALSE,
+                    labeltype="custom",
+                    custom.labels = levels(stm_dfmpres1$meta$admin),
+                    main=frexlab[20],
+                    xlim=c(-0.1,0.4))
+```
+
+##Plot automation keywords in presidential speech
+
+```{r}
+##get document variable in corpus
+documentpres<-corpuspres$documents
+documentpres<-documentpres%>%
+  mutate(year=str_extract(date, "\\d{4}"))
+
+##pick out the five keywords with stringr's str_count
+documentpres$automat<-str_count(documentpres$texts,
+                                pattern='[:space:]automation')
+documentpres$technolog<-str_count(documentpres$texts,
+                                  pattern='[:space:]technolog*')
+documentpres$robot<-str_count(documentpres$texts,
+                              pattern='[:space:]robot*')
+documentpres$ai<-str_count(documentpres$texts,
+                           pattern='[:space:]AI[:space:]')
+documentpres$machine<-str_count(documentpres$texts,
+                                pattern='[:space:]machine*')
+documentpres$train<-str_count(documentpres$texts,
+                                pattern='[:space:]train*')
+documentpres$computer<-str_count(documentpres$texts,
+                                 pattern='[:space:]computer*')
+
+##put them in a nice dataframe
+documentpres1<-group_by(documentpres, year)%>%
+  summarize(automat=sum(automat),
+            technolog=sum(technolog),
+            robot=sum(robot),
+            ai=sum(ai),
+            machine=sum(machine),
+            train=sum(train),
+            computer=sum(computer))%>%
+  ungroup()%>%
+  filter(!is.na(year) & year>1992)
+```
+
+##President: Plot keywords
+
+```{r}
+##plot the five keywords: raw count
+documentpres2<-melt(documentpres1, id=c("year"))
+documentpres2$year<-as.numeric(documentpres2$year)
+numberpres<-ggplot(data=documentpres2)+
+  geom_line(aes(x=year, y=value, color=variable))+
+  scale_x_continuous(labels=c(seq(1993, 2021, 4)), 
+                     breaks=c(seq(1993, 2021, 4)))+
+  theme_bw()+
+  ggtitle("Number of mentions of automation keywords, 1973-2021")+
+  ylab("number of mentions")+
+  scale_color_manual("",values=c('red','blue','green','yellow', 'black', "purple",
+                                 "orange"),
+                     labels=c("automation", "technolog*", "robot*",
+                              "ai", "machine*", "train*", "computer*"))+
+  theme(legend.position=c(0.7, 0.7))
+ggsave(plot=numberpres, filename="numberpres.pdf")
+
+##create summary
+pressummary<-summary(corpuspres, n=52511)
+
+##store as dataframe
+pressummary<-as.data.frame(pressummary)
+##add year variable
+pressummary<-pressummary%>%
+  mutate(year=as.numeric(str_extract(date, "\\d{4}")))
+
+##extract sum of tokens by year
+pressummary1<-pressummary%>%
+  select(year, Tokens, admin)%>%
+  group_by(year, admin)%>%
+  summarize(Tokens=sum(Tokens))%>%
+  ungroup()%>%
+  filter(!is.na(year) & year>1992)
+pressummary1<-pressummary1[-7,]
+
+##redo first step with year and admin as grouping variable
+documentpres3<-group_by(documentpres, year, admin)%>%
+  summarize(automat=sum(automat),
+            technolog=sum(technolog),
+            robot=sum(robot),
+            ai=sum(ai),
+            machine=sum(machine),
+            train=sum(train),
+            computer=sum(computer))%>%
+  ungroup()%>%
+  filter(!is.na(year) & year>1992)
+documentpres4<-melt(documentpres3, id=c("year", "admin"))
+documentpres4$year<-as.numeric(documentpres4$year)
+
+##plot the five keywords: count/tokens
+documentpres5<-left_join(documentpres4, pressummary1, by=c("year"="year", "admin"="admin"))
+##CONTINUE HERE
+documentpres5<-documentpres5%>%
+  mutate(proptoken=(value/Tokens)*100)%>%select(c(1,2,3,6))
+documentpresclinton<-documentpres5%>%
+  filter(admin=="Clinton")
+documentpresbush<-documentpres5%>%
+  filter(admin=="Bush")
+documentpresobama<-documentpres5%>%
+  filter(admin=="Obama")
+documentprestrump<-documentpres5%>%
+  filter(admin=="Trump")
+
+##plot the graph for percentage mentions
+percentpres<-ggplot()+
+  geom_line(data=documentpresclinton, aes(x=year, y=proptoken, color=variable))+
+  geom_line(data=documentpresbush, aes(x=year, y=proptoken, color=variable))+
+  geom_line(data=documentpresobama, aes(x=year, y=proptoken, color=variable))+
+  geom_line(data=documentprestrump, aes(x=year, y=proptoken, color=variable))+
+  scale_x_continuous(labels=c(seq(1993, 2021, 4)), 
+                     breaks=c(seq(1993, 2021, 4)))+
+  theme_bw()+
+  ylab('percentage (p) of mentions')+
+  scale_color_manual("",values=c('red','blue','green','yellow', 'black',
+                                 'purple', 'orange'),
+                     labels=c("automation", "technolog*", "robot*",
+                              "ai", "machine*", "train*", "computer*"))+
+  theme(legend.position = "none")
+  #theme(legend.position=c(0.85, 0.83))
+ggsave(plot=percentpres, filename="percentpres.pdf")
+##Check what the presidents are saying kwic
+corpusclinton<-corpus_subset(corpuspres, admin=="Clinton")
+kwictrain<-kwic(tokens(corpuspres), "train*", window=5)
+head(kwictrain, 10)
+```
+
+
+TO DO: word count for technology, AI, computer, retraining, skills
+STM with covariate: time and admin
+
+Problem of load more button: https://stackoverflow.com/questions/56118999/issue-scraping-page-with-load-more-button-with-rvest 

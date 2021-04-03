@@ -1,0 +1,1400 @@
+---
+title: "AutoJobQuality"
+output: pdf_document
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(foreign)
+library(dplyr)
+library(reshape2)
+library(naniar)
+library(ggplot2)
+library(plm)
+#https://cran.r-project.org/web/packages/outreg/outreg.pdf
+library(outreg)
+```
+
+```{r}
+setwd("/Volumes/LARRYLIU/iclouddrive/Automation Work Project")
+#david dorn crosswalk: 2000 occupation https://www.ddorn.net/data.htm
+
+#extract table from pdf: https://datascienceplus.com/extracting-tables-from-pdfs-in-r-using-the-tabulizer-package/
+
+#crosswalk: soc code, census 2000 https://www2.census.gov/programs-surveys/demo/guidance/industry-occupation/occ2000t.pdf
+
+#crosswalk: Soc to ISCO 
+#https://www.bls.gov/soc/soccrosswalks.htm
+```
+
+##GSS
+
+```{r}
+##load GSS data
+gss<-read.csv("GSS.csv")
+gss_crosswalk<-read.csv("GSS_crosswalk.csv")
+
+##merge: left_join, id: censusocc00
+gss_crosswalk1<-select(gss_crosswalk, censusocc00, isco08)
+gss1<-left_join(gss, gss_crosswalk1, by=c("censusocc00", "censusocc00"))
+gss1<-gss1[!duplicated(gss1),]
+
+##exclude not applicable
+gss2<-gss1
+gss2$isco08<-as.character(gss2$isco08)
+gss2<-gss1[!(gss2$isco08=="Not applicable"),]
+gss2<-gss2[!(gss2$isco08=="No answer"),]
+
+##transform variables into character vector
+gss2<-gss2%>%
+  mutate(stress=as.character(stress),
+            satjob1=as.character(satjob1),
+            health1=as.character(health1),
+            jobsecok=as.character(jobsecok),
+            fringeok=as.character(fringeok),
+            secondwk=as.character(secondwk),
+            famwkoff=as.character(famwkoff),
+            partfull=as.character(partfull),
+            rincome=as.character(rincome),
+            race=as.character(race),
+            sex=as.character(sex),
+            educ=as.character(educ))
+
+##create dichotomous variable (ending d) and numbered (ending n) for outcomes
+gss3<-gss2%>%
+  mutate(stressd=ifelse(stress %in% c("Never", "Hardly ever", 
+                                      "Sometimes"),0,
+                  ifelse(stress %in% c("Often", "Always"),1,NA)),
+         stressn=ifelse(stress %in% "Never",0,
+                  ifelse (stress %in% "Hardly ever",1,
+                  ifelse(stress %in% "Sometimes", 2,
+                  ifelse(stress %in% "Often",3,
+                  ifelse(stress %in% "Always",4,NA))))),
+         satjob1d=ifelse(satjob1 %in% c("Not at all satisfied", 
+                                        "Not too satisfied"),0,
+                  ifelse(satjob1 %in% c("Somewhat satisfied", 
+                                        "Very satisfied"),1,NA)),
+         satjob1n=ifelse(satjob1 %in% "Not at all satisfied",0,
+                  ifelse(satjob1 %in% "Not too satisfied",1,
+                  ifelse(satjob1 %in% "Somewhat satisfied",2,
+                  ifelse(satjob1 %in% "Very satisfied",3,NA)))),
+         health1d=ifelse(health1 %in% "Poor", 0,
+                  ifelse(health1 %in% c("Fair", "Good", "Very good",
+                                  "Excellent"), 1,NA)),
+         health1n=ifelse(health1 %in% "Poor",0,
+                  ifelse(health1 %in% "Fair", 1,
+                  ifelse(health1 %in% "Good",2,
+                  ifelse(health1 %in% "Very good",3,
+                  ifelse(health1 %in% "Excellent",4,NA))))),
+         jobsecokd=ifelse(jobsecok %in% c("Not at all true", 
+                                          "Not too true"),0,
+                  ifelse(jobsecok %in% c("Somewhat true", 
+                                         "Very true"),1,NA)),
+         jobsecokn=ifelse(jobsecok %in% "Not at all true",0,
+                  ifelse(jobsecok %in% "Not too true",1,
+                  ifelse(jobsecok %in% "Somewhat true", 2,
+                  ifelse(jobsecok %in% "Very true",3,NA)))),
+         fringeokd=ifelse(fringeok %in% c("Not at all true", "Not too true")
+                          ,0,
+                  ifelse(fringeok %in% c("Somewhat true", "Very true"),
+                         1,NA)),
+         fringeokn=ifelse(fringeok %in% "Not at all true",0,
+                  ifelse(fringeok %in% "Not too true",1,
+                  ifelse(fringeok %in% "Somewhat true", 2,
+                  ifelse(fringeok %in% "Very true",3,NA)))),
+         secondwkd=ifelse(secondwk %in% "No",0,
+                  ifelse(secondwk %in% "Yes",1,NA)),
+         famwkoffd=ifelse(famwkoff %in% c("Very hard", "Somewhat hard"),0,
+                  ifelse(famwkoff %in% c("Not too hard", "Not at all hard"),
+                         1,NA)),
+         famwkoffn=ifelse(famwkoff %in% "Very hard",0,
+                  ifelse(famwkoff %in% "Somewhat hard",1,
+                  ifelse(famwkoff %in% "Not too hard",2,
+                  ifelse(famwkoff %in% "Not at all hard",3,NA)))),
+         fulld=ifelse(partfull %in% "Part-time",0,
+                  ifelse(partfull %in% "Full-time",1,NA)),
+         rincomed=ifelse(rincome %in% c("Lt $1000","$10000 - 14999",
+                                        "$15000 - 19999","$1000 to 2999",  
+                                        "$4000 to 4999","$7000 to 7999",
+                                        "$5000 to 5999","$20000 - 24999", 
+                                        "$3000 to 3999","$6000 to 6999",
+                                        "$8000 to 9999"),0,
+                  ifelse(rincome %in% "$25000 or more",1,NA)),
+         blackraced=ifelse(race %in% c("Other", "White"),0,
+                  ifelse(race %in% "Black",1,NA)),
+         femalesexd=ifelse(sex %in% "Male",1,
+                  ifelse(sex %in% "Female",0,NA)),
+         colleged=ifelse(educ %in% c("14","13","2","7","12" ,"11","15",                  "9","8","10","6","5","4","0","1","3"),0,
+                  ifelse(educ %in% c("16", "17", "18", "19", "20"),1,NA))
+         )
+##convert isco08 into numeric
+gss3$isco08<-as.numeric(as.character(gss3$isco08))
+##add ID variable: paste year and id (year-id)
+idvar<-c("year", "id")
+gss3$idvar<-do.call(paste, c(gss3[idvar], sep="-"))
+
+##load soc-isco crosswalk
+socisco<-read.csv("ISCO_SOC_Crosswalk.csv")
+socisco1<-socisco[,c(1,4)]
+socisco1$soc10<-gsub("-", "", socisco1$soc10)
+socisco1$soc10<-as.numeric(socisco1$soc10)
+##fulljoin crosswalk
+gss4<-full_join(gss3, socisco, by=c("isco08", "isco08"))
+gss4$soc10<-gsub("-", "", gss4$soc10)
+gss4$soc10<-as.numeric(gss4$soc10)
+```
+
+##FreyOsborne
+```{r}
+##load freyosborne
+#troublesome csv https://stackoverflow.com/questions/25771071/r-read-csv-more-columns-than-column-names-error
+frey<-readLines("freyosborne.csv")
+frey1<-read.csv(textConnection(paste0(frey, collapse="\n")),
+                header=FALSE, stringsAsFactors = FALSE)
+colnames(frey1)<-frey1[1,]
+frey2<-frey1[-1,]
+##remove "-" in soc10
+frey2$soc10<-gsub("-", "", frey2$soc10)
+frey2$soc10<-as.numeric(frey2$soc10)
+
+##merge frey with gss
+gss5<-left_join(gss4, frey2, by=c("soc10", "soc10"))
+
+##remove NA from computerizationprob
+gss5<-gss5[!is.na(gss5$computerizationprob),]
+##convert computerizationprob into numeric
+gss5$computerizationprob<-as.numeric(gss5$computerizationprob)
+
+##distribute computerization score by idvar
+computerization<-gss5%>%
+  group_by(idvar)%>%
+  summarize(computefrey=mean(computerizationprob))
+
+##attach back to main dataframe
+gss6<-left_join(gss3, computerization, by=c("idvar", "idvar"))
+```
+
+##Webb
+```{r}
+##david dorn crosswalk
+dd<-read.dta("occ2000_occ1990dd.dta")
+##rename occ to occ00
+dd<-rename(dd, occ00=occ)
+##webb automatability percentile
+webb<-read.csv("webb_percentile.csv")
+
+##merge dd and webb
+webb1<-left_join(webb, dd, by=c("occ1990dd", "occ1990dd"))
+##group_by occ00, summarize
+webb1<-webb1%>%
+  group_by(occ00)%>%
+  summarize(pct_software=mean(pct_software),
+            pct_robot=mean(pct_robot),
+            pct_ai=mean(pct_ai))
+
+##load soc00-census00 crosswalk
+census00<-read.csv("occ2000census.csv")
+census001<-census00[1:529,1:2]
+##remove "-"
+census001$soc10<-as.character(census001$soc10)
+census001$soc10<-gsub("-", "", census001$soc10)
+census001$soc10<-as.numeric(census001$soc10)
+
+##merge webb1 and soc00 crosswalk
+webb2<-left_join(webb1, census001, by=c("occ00", "occ00"))
+##group_by soc10, summarize
+webb2<-webb2%>%
+  group_by(soc10)%>%
+  summarize(pct_software=mean(pct_software),
+            pct_robot=mean(pct_robot),
+            pct_ai=mean(pct_ai))
+
+##merge webb2 and socisco
+webb3<-left_join(webb2, socisco1, by=c("soc10", "soc10"))
+
+##groupby isco08, take mean for the three variables
+webb4<-webb3%>%
+  group_by(isco08)%>%
+  summarize(pct_software=mean(pct_software),
+            pct_robot=mean(pct_robot),
+            pct_ai=mean(pct_ai))
+
+##merge gss6 and webb3
+gss7<-left_join(gss6, webb4, by=c("isco08", "isco08"))
+##convert naicsind07 into character
+gss7$naicsind07<-as.character(gss7$naicsind07)
+
+##create naics file
+naics<-unique(gss7$naicsind07)
+naics<-as.data.frame(naics)
+naics<-naics[1:264,]
+naics<-as.data.frame(naics)
+write.csv(naics, "naics.csv")
+```
+
+##Klems
+```{r}
+##load naics1: crosswalk between naicsind07 in gss and klemsindustry in usklems
+indus<-read.csv("naics1.csv")
+
+##reshape: melt https://ademos.people.uic.edu/Chapter8.html
+indus1<-melt(indus, id=c("bigindustry", "id"),
+             variable.name = "smallindustry",
+             value.name = "naicsind07")
+##replace empty with NA
+indus1<-indus1%>%replace_with_na(replace=list(naicsind07=""))
+##drop NA observations
+indus1<-indus1[!is.na(indus1$naicsind07),]
+##sort in ascending order by id
+indus1<-indus1[order(indus1$id),]
+##filter out smallindustry
+indus1<-indus1[,c(1,2,4)]
+##rename big industry
+indus1<-rename(indus1, klemsind=bigindustry,
+               klemsindid=id)
+
+##load usklems
+klems<-read.csv("usklems.csv")
+##filter to desired years, 1998, 2006, 2014
+klems1<-klems%>%
+  filter(year%in%c("1998", "2006", "2014"))
+##mutate: k/o (capital/output) ratio using constant values
+##k/l (capital/labor) ratio using constant values
+klems1<-klems1%>%
+  mutate(ko_ratio=capitalcon/grossoutputcon,
+         kl_ratio=capitalcon/laborcon)
+##merge with indus1 crosswalk
+klems2<-left_join(klems1, indus1, by=c("klemsindid", "klemsindid"))
+
+##load naics to attach naics_id to klems2 and gss7
+naics1a<-read.csv("naics.csv")
+##rename naics column to naicsind07
+naics1<-rename(naics1a, naicsind07=naics,
+               naics_id=X)
+naics1$naicsind07<-as.character(naics1$naicsind07)
+##merge with klems2
+klems3<-left_join(klems2, naics1, by=c("naicsind07", "naicsind07"))
+##merge with gss7
+gss7<-left_join(gss7, naics1, by=c("naicsind07", "naicsind07"))
+
+##create yearlag and yearnaics
+yearnaics<-c("yearlag", "naics_id")
+klems3<-klems3%>%
+  mutate(yearlag=year+4)
+klems3$yearnaics<-do.call(paste, c(klems3[yearnaics], sep="-"))
+##select desired variables
+klems3<-select(klems3, ko_ratio, kl_ratio, yearnaics)
+##remove duplicate on yearnaics
+klems3<-klems3[!duplicated(klems3$yearnaics),]
+
+##create yearnaics in gss7
+yearnaics1<-c("year", "naics_id")
+gss7$yearnaics<-do.call(paste, c(gss7[yearnaics1], sep="-"))
+##merge gss7 and klems3
+gss8<-left_join(gss7, klems3, by=c("yearnaics", "yearnaics"))
+```
+
+##Onet Outlook
+```{r}
+##Load onet
+onet<-read.csv("onet_outlook.csv")
+##filter out NA from projjobs
+onet1<-filter(onet, !is.na(projjobs))
+onet1$soc10<-as.character(onet1$soc10)
+##keep first 7 characters of soc10
+onet1$soc10<-substr(onet1$soc10, 0, 7)
+onet1$soc10<-gsub("-", "", onet1$soc10)
+onet1$soc10<-as.numeric(onet1$soc10)
+
+##convert projgrowth: decline is 1, 0 otherwise
+onet1$projgrowth<-as.character(onet1$projgrowth)
+onet1$decline<-ifelse(onet1$projgrowth=="Decline", 1, 0)
+onet1$declineord<-ifelse(onet1$projgrowth=="Much faster than average", 0,
+                  ifelse(onet1$projgrowth=="Faster than average",1,
+                  ifelse(onet1$projgrowth=="Average",2,
+                  ifelse(onet1$projgrowth=="Slower than average",3,
+                  ifelse(onet1$projgrowth=="Little or no change",4,
+                  5)))))
+
+##attach isco08
+onet2<-left_join(onet1, socisco1, by=c("soc10", "soc10"))
+##take mean of decline and declineord, grouped by isco08
+onet3<-onet2%>%
+  group_by(isco08)%>%
+  summarize(decline=mean(decline),
+            declineord=mean(declineord))
+
+##merge with gss8
+gss9<-left_join(gss8, onet3, by=c("isco08", "isco08"))
+```
+
+```{r}
+##manually check the webb observations
+gss10<-gss9%>%
+  select(idvar, naicsind07, censusocc00, decline, declineord)%>%
+  mutate(censusocc00=as.character(censusocc00))%>%
+  filter(is.na(decline))
+gss10<-gss10[!duplicated(gss10[,"censusocc00"]),]
+#write.csv(gss10, "gss10.csv")
+
+##fill webb
+gss9<-gss9%>%
+  mutate(pct_software=ifelse(censusocc00=="Secretaries and administrative assistants",33,pct_software),
+         pct_robot=ifelse(censusocc00=="Secretaries and administrative assistants",43,pct_robot),
+         pct_ai=ifelse(censusocc00=="Secretaries and administrative assistants",9,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Registered nurses",43,pct_software),
+         pct_robot=ifelse(censusocc00=="Registered nurses",22,pct_robot),
+         pct_ai=ifelse(censusocc00=="Registered nurses",78,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Secondary school teachers",19,pct_software),
+         pct_robot=ifelse(censusocc00=="Secondary school teachers",10,pct_robot),
+         pct_ai=ifelse(censusocc00=="Secondary school teachers",43,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Health practitioner support technologists and technicians",87,pct_software),
+         pct_robot=ifelse(censusocc00=="Health practitioner support technologists and technicians",53,pct_robot),
+         pct_ai=ifelse(censusocc00=="Health practitioner support technologists and technicians",100,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Other healthcare practitioners and technical occupations",32,pct_software),
+         pct_robot=ifelse(censusocc00=="Other healthcare practitioners and technical occupations",33,pct_robot),
+         pct_ai=ifelse(censusocc00=="Other healthcare practitioners and technical occupations",34,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Nursing, psychiatric, and home health aides",30,pct_software),
+         pct_robot=ifelse(censusocc00=="Nursing, psychiatric, and home health aides",57,pct_robot),
+         pct_ai=ifelse(censusocc00=="Nursing, psychiatric, and home health aides",26,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Surveyors, cartographers, and photogrammetrists",7,pct_software),
+         pct_robot=ifelse(censusocc00=="Surveyors, cartographers, and photogrammetrists",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Surveyors, cartographers, and photogrammetrists",14,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Counselors",17,pct_software),
+         pct_robot=ifelse(censusocc00=="Counselors",9,pct_robot),
+         pct_ai=ifelse(censusocc00=="Counselors",40,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Preschool and kindergarten teachers",30,pct_software),
+         pct_robot=ifelse(censusocc00=="Preschool and kindergarten teachers",51,pct_robot),
+         pct_ai=ifelse(censusocc00=="Preschool and kindergarten teachers",44,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="First-line supervisors of non-retail sales workers",28,pct_software),
+         pct_robot=ifelse(censusocc00=="First-line supervisors of non-retail sales workers",20,pct_robot),
+         pct_ai=ifelse(censusocc00=="First-line supervisors of non-retail sales workers",61,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Lifeguards and other recreational, and all other protective service workers",44,pct_software),
+         pct_robot=ifelse(censusocc00=="Lifeguards and other recreational, and all other protective service workers",68,pct_robot),
+         pct_ai=ifelse(censusocc00=="Lifeguards and other recreational, and all other protective service workers",57,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Software developers, applications and systems software",98,pct_software),
+         pct_robot=ifelse(censusocc00=="Software developers, applications and systems software",88,pct_robot),
+         pct_ai=ifelse(censusocc00=="Software developers, applications and systems software",94,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Health practitioner support technologists and technicians",32,pct_software),
+         pct_robot=ifelse(censusocc00=="Health practitioner support technologists and technicians",33,pct_robot),
+         pct_ai=ifelse(censusocc00=="Health practitioner support technologists and technicians",34,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Elementary and middle school teachers",22,pct_software),
+         pct_robot=ifelse(censusocc00=="Elementary and middle school teachers",14,pct_robot),
+         pct_ai=ifelse(censusocc00=="Elementary and middle school teachers",40,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Designers",59,pct_software),
+         pct_robot=ifelse(censusocc00=="Designers",47,pct_robot),
+         pct_ai=ifelse(censusocc00=="Designers",77,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Marketing and sales managers",68,pct_software),
+         pct_robot=ifelse(censusocc00=="Marketing and sales managers",37,pct_robot),
+         pct_ai=ifelse(censusocc00=="Marketing and sales managers",82,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Postsecondary teachers",37,pct_software),
+         pct_robot=ifelse(censusocc00=="Postsecondary teachers",34,pct_robot),
+         pct_ai=ifelse(censusocc00=="Postsecondary teachers",55,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Special education teachers",24,pct_software),
+         pct_robot=ifelse(censusocc00=="Special education teachers",25,pct_robot),
+         pct_ai=ifelse(censusocc00=="Special education teachers",54,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Secondary school teachers",19,pct_software),
+         pct_robot=ifelse(censusocc00=="Secondary school teachers",10,pct_robot),
+         pct_ai=ifelse(censusocc00=="Secondary school teachers",43,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Driver/sales workers and truck drivers",75,pct_software),
+         pct_robot=ifelse(censusocc00=="Driver/sales workers and truck drivers",85,pct_robot),
+         pct_ai=ifelse(censusocc00=="Driver/sales workers and truck drivers",35,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Nursing, psychiatric, and home health aides",30,pct_software),
+         pct_robot=ifelse(censusocc00=="Nursing, psychiatric, and home health aides",57,pct_robot),
+         pct_ai=ifelse(censusocc00=="Nursing, psychiatric, and home health aides",26,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Medical, dental, and ophthalmic laboratory technicians",87,pct_software),
+         pct_robot=ifelse(censusocc00=="Medical, dental, and ophthalmic laboratory technicians",53,pct_robot),
+         pct_ai=ifelse(censusocc00=="Medical, dental, and ophthalmic laboratory technicians",100,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Network and computer systems administrators",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Network and computer systems administrators",32,pct_robot),
+         pct_ai=ifelse(censusocc00=="Network and computer systems administrators",83,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Printing press operators",97,pct_software),
+         pct_robot=ifelse(censusocc00=="Printing press operators",81,pct_robot),
+         pct_ai=ifelse(censusocc00=="Printing press operators",89,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Industrial engineers, including health and safety",62,pct_software),
+         pct_robot=ifelse(censusocc00=="Industrial engineers, including health and safety",50,pct_robot),
+         pct_ai=ifelse(censusocc00=="Industrial engineers, including health and safety",84,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Aircraft pilots and flight engineers",69,pct_software),
+         pct_robot=ifelse(censusocc00=="Aircraft pilots and flight engineers",22,pct_robot),
+         pct_ai=ifelse(censusocc00=="Aircraft pilots and flight engineers",75,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Artists and related workers",66,pct_software),
+         pct_robot=ifelse(censusocc00=="Artists and related workers",33,pct_robot),
+         pct_ai=ifelse(censusocc00=="Artists and related workers",52,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Miscellaneous plant and system operators",63,pct_software),
+         pct_robot=ifelse(censusocc00=="Miscellaneous plant and system operators",59,pct_robot),
+         pct_ai=ifelse(censusocc00=="Miscellaneous plant and system operators",75,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Security guards and gaming surveillance officers",67,pct_software),
+         pct_robot=ifelse(censusocc00=="Security guards and gaming surveillance officers",54,pct_robot),
+         pct_ai=ifelse(censusocc00=="Security guards and gaming surveillance officers",76,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Training and development specialists",10,pct_software),
+         pct_robot=ifelse(censusocc00=="Training and development specialists",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Training and development specialists",44,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Marketing and sales managers",68,pct_software),
+         pct_robot=ifelse(censusocc00=="Marketing and sales managers",37,pct_robot),
+         pct_ai=ifelse(censusocc00=="Marketing and sales managers",82,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Web developers",98,pct_software),
+         pct_robot=ifelse(censusocc00=="Web developers",88,pct_robot),
+         pct_ai=ifelse(censusocc00=="Web developers",94,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Cashiers",65,pct_software),
+         pct_robot=ifelse(censusocc00=="Cashiers",23,pct_robot),
+         pct_ai=ifelse(censusocc00=="Cashiers",38,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Human resources managers",10,pct_software),
+         pct_robot=ifelse(censusocc00=="Human resources managers",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Human resources managers",44,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Miscellaneous assemblers and fabricators",72,pct_software),
+         pct_robot=ifelse(censusocc00=="Miscellaneous assemblers and fabricators",72,pct_robot),
+         pct_ai=ifelse(censusocc00=="Miscellaneous assemblers and fabricators",55,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Other transportation workers",98,pct_software),
+         pct_robot=ifelse(censusocc00=="Other transportation workers",93,pct_robot),
+         pct_ai=ifelse(censusocc00=="Other transportation workers",93,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer support specialists",84,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer support specialists",61,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer support specialists",68,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Crossing guards",67,pct_software),
+         pct_robot=ifelse(censusocc00=="Crossing guards",54,pct_robot),
+         pct_ai=ifelse(censusocc00=="Crossing guards",76,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer network architects",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer network architects",32,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer network architects",83,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Education administrators",26,pct_software),
+         pct_robot=ifelse(censusocc00=="Education administrators",13,pct_robot),
+         pct_ai=ifelse(censusocc00=="Education administrators",63,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Physicians and surgeons",27,pct_software),
+         pct_robot=ifelse(censusocc00=="Physicians and surgeons",11,pct_robot),
+         pct_ai=ifelse(censusocc00=="Physicians and surgeons",53,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer systems analysts",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer systems analysts",32,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer systems analysts",83,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Molders and molding machine setters, operators, and tenders, metal and plastic",44,pct_software),
+         pct_robot=ifelse(censusocc00=="Molders and molding machine setters, operators, and tenders, metal and plastic",67,pct_robot),
+         pct_ai=ifelse(censusocc00=="Molders and molding machine setters, operators, and tenders, metal and plastic",25,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Electrical and electronics engineers",74,pct_software),
+         pct_robot=ifelse(censusocc00=="Electrical and electronics engineers",52,pct_robot),
+         pct_ai=ifelse(censusocc00=="Electrical and electronics engineers",87,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Door-to-door sales workers, news and street vendors, and related workers",39,pct_software),
+         pct_robot=ifelse(censusocc00=="Door-to-door sales workers, news and street vendors, and related workers",10,pct_robot),
+         pct_ai=ifelse(censusocc00=="Door-to-door sales workers, news and street vendors, and related workers",13,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Drafters",49,pct_software),
+         pct_robot=ifelse(censusocc00=="Drafters",34,pct_robot),
+         pct_ai=ifelse(censusocc00=="Drafters",81,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Social and human service assistants",20,pct_software),
+         pct_robot=ifelse(censusocc00=="Social and human service assistants",17,pct_robot),
+         pct_ai=ifelse(censusocc00=="Social and human service assistants",60,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Information and record clerks, all other",71,pct_software),
+         pct_robot=ifelse(censusocc00=="Information and record clerks, all other",49,pct_robot),
+         pct_ai=ifelse(censusocc00=="Information and record clerks, all other",59,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Social workers",20,pct_software),
+         pct_robot=ifelse(censusocc00=="Social workers",17,pct_robot),
+         pct_ai=ifelse(censusocc00=="Social workers",60,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Physical scientists, all other",78,pct_software),
+         pct_robot=ifelse(censusocc00=="Physical scientists, all other",25,pct_robot),
+         pct_ai=ifelse(censusocc00=="Physical scientists, all other",89,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Clinical laboratory technologists and technicians",87,pct_software),
+         pct_robot=ifelse(censusocc00=="Clinical laboratory technologists and technicians",53,pct_robot),
+         pct_ai=ifelse(censusocc00=="Clinical laboratory technologists and technicians",100,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Air traffic controllers and airfield operations specialists",62,pct_software),
+         pct_robot=ifelse(censusocc00=="Air traffic controllers and airfield operations specialists",33,pct_robot),
+         pct_ai=ifelse(censusocc00=="Air traffic controllers and airfield operations specialists",29,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Architects, except naval",67,pct_software),
+         pct_robot=ifelse(censusocc00=="Architects, except naval",25,pct_robot),
+         pct_ai=ifelse(censusocc00=="Architects, except naval",87,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Aircraft pilots and flight engineers",66,pct_software),
+         pct_robot=ifelse(censusocc00=="Aircraft pilots and flight engineers",59,pct_robot),
+         pct_ai=ifelse(censusocc00=="Aircraft pilots and flight engineers",80,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer systems analysts",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer systems analysts",32,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer systems analysts",83,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Medical scientists",59,pct_software),
+         pct_robot=ifelse(censusocc00=="Medical scientists",25,pct_robot),
+         pct_ai=ifelse(censusocc00=="Medical scientists",93,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Medical assistants",30,pct_software),
+         pct_robot=ifelse(censusocc00=="Medical assistants",57,pct_robot),
+         pct_ai=ifelse(censusocc00=="Medical assistants",26,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Paralegals and legal assistants",16,pct_software),
+         pct_robot=ifelse(censusocc00=="Paralegals and legal assistants",3,pct_robot),
+         pct_ai=ifelse(censusocc00=="Paralegals and legal assistants",25,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Grounds maintenance workers",80,pct_software),
+         pct_robot=ifelse(censusocc00=="Grounds maintenance workers",98,pct_robot),
+         pct_ai=ifelse(censusocc00=="Grounds maintenance workers",31,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Welding, soldering, and brazing workers",61,pct_software),
+         pct_robot=ifelse(censusocc00=="Welding, soldering, and brazing workers",82,pct_robot),
+         pct_ai=ifelse(censusocc00=="Welding, soldering, and brazing workers",30,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Probation officers and correctional treatment specialists",59,pct_software),
+         pct_robot=ifelse(censusocc00=="Probation officers and correctional treatment specialists",54,pct_robot),
+         pct_ai=ifelse(censusocc00=="Probation officers and correctional treatment specialists",28,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Chemical processing machine setters, operators, and tenders",59,pct_software),
+         pct_robot=ifelse(censusocc00=="Chemical processing machine setters, operators, and tenders",55,pct_robot),
+         pct_ai=ifelse(censusocc00=="Chemical processing machine setters, operators, and tenders",23,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Miscellaneous life, physical, and social science technicians",80,pct_software),
+         pct_robot=ifelse(censusocc00=="Miscellaneous life, physical, and social science technicians",51,pct_robot),
+         pct_ai=ifelse(censusocc00=="Miscellaneous life, physical, and social science technicians",82,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Engineering technicians, except drafters",92,pct_software),
+         pct_robot=ifelse(censusocc00=="Engineering technicians, except drafters",65,pct_robot),
+         pct_ai=ifelse(censusocc00=="Engineering technicians, except drafters",91,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Environmental scientists and geoscientists",59,pct_software),
+         pct_robot=ifelse(censusocc00=="Environmental scientists and geoscientists",25,pct_robot),
+         pct_ai=ifelse(censusocc00=="Environmental scientists and geoscientists",91,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Miscellaneous health technologists and technicians",32,pct_software),
+         pct_robot=ifelse(censusocc00=="Miscellaneous health technologists and technicians",33,pct_robot),
+         pct_ai=ifelse(censusocc00=="Miscellaneous health technologists and technicians",34,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Miscellaneous agricultural workers",97,pct_software),
+         pct_robot=ifelse(censusocc00=="Miscellaneous agricultural workers",93,pct_robot),
+         pct_ai=ifelse(censusocc00=="Miscellaneous agricultural workers",93,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Dispatchers",96,pct_software),
+         pct_robot=ifelse(censusocc00=="Dispatchers",54,pct_robot),
+         pct_ai=ifelse(censusocc00=="Dispatchers",100,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Human resources workers",91,pct_software),
+         pct_robot=ifelse(censusocc00=="Human resources workers",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Human resources workers",21,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Chemists and materials scientists",47,pct_software),
+         pct_robot=ifelse(censusocc00=="Chemists and materials scientists",18,pct_robot),
+         pct_ai=ifelse(censusocc00=="Chemists and materials scientists",85,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Electrical and electronics repairers, industrial and utility",71,pct_software),
+         pct_robot=ifelse(censusocc00=="Electrical and electronics repairers, industrial and utility",59,pct_robot),
+         pct_ai=ifelse(censusocc00=="Electrical and electronics repairers, industrial and utility",84,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Dentists",84,pct_software),
+         pct_robot=ifelse(censusocc00=="Dentists",62,pct_robot),
+         pct_ai=ifelse(censusocc00=="Dentists",54,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Other education, training, and library workers",17,pct_software),
+         pct_robot=ifelse(censusocc00=="Other education, training, and library workers",38,pct_robot),
+         pct_ai=ifelse(censusocc00=="Other education, training, and library workers",9,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Photographic process workers and processing machine operators",74,pct_software),
+         pct_robot=ifelse(censusocc00=="Photographic process workers and processing machine operators",62,pct_robot),
+         pct_ai=ifelse(censusocc00=="Photographic process workers and processing machine operators",89,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Training and development specialists",10,pct_software),
+         pct_robot=ifelse(censusocc00=="Training and development specialists",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Training and development specialists",44,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="First-line supervisors of construction trades and extraction workers",41,pct_software),
+         pct_robot=ifelse(censusocc00=="First-line supervisors of construction trades and extraction workers",48,pct_robot),
+         pct_ai=ifelse(censusocc00=="First-line supervisors of construction trades and extraction workers",87,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Lifeguards and other recreational, and all other protective service workers",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Lifeguards and other recreational, and all other protective service workers",80,pct_robot),
+         pct_ai=ifelse(censusocc00=="Lifeguards and other recreational, and all other protective service workers",40,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Miscellaneous community and social service specialists,",5,pct_software),
+         pct_robot=ifelse(censusocc00=="Miscellaneous community and social service specialists,",9,pct_robot),
+         pct_ai=ifelse(censusocc00=="Miscellaneous community and social service specialists,",21,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Transportation security screeners",20,pct_software),
+         pct_robot=ifelse(censusocc00=="Transportation security screeners",75,pct_robot),
+         pct_ai=ifelse(censusocc00=="Transportation security screeners",46,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Medical transcriptionists",32,pct_software),
+         pct_robot=ifelse(censusocc00=="Medical transcriptionists",33,pct_robot),
+         pct_ai=ifelse(censusocc00=="Medical transcriptionists",34,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Database administrators",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Database administrators",32,pct_robot),
+         pct_ai=ifelse(censusocc00=="Database administrators",83,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Pipelayers, plumbers, pipefitters, and steamfitters",74,pct_software),
+         pct_robot=ifelse(censusocc00=="Pipelayers, plumbers, pipefitters, and steamfitters",83,pct_robot),
+         pct_ai=ifelse(censusocc00=="Pipelayers, plumbers, pipefitters, and steamfitters",43,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Geological and petroleum technicians",59,pct_software),
+         pct_robot=ifelse(censusocc00=="Geological and petroleum technicians",25,pct_robot),
+         pct_ai=ifelse(censusocc00=="Geological and petroleum technicians",91,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Compensation and benefits managers",10,pct_software),
+         pct_robot=ifelse(censusocc00=="Compensation and benefits managers",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Compensation and benefits managers",44,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer programmers",98,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer programmers",88,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer programmers",94,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Communications  equipment operators, all other",100,pct_software),
+         pct_robot=ifelse(censusocc00=="Communications  equipment operators, all other",77,pct_robot),
+         pct_ai=ifelse(censusocc00=="Communications  equipment operators, all other",82,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="First-line supervisors of protective service workers, all other",21,pct_software),
+         pct_robot=ifelse(censusocc00=="First-line supervisors of protective service workers, all other",47,pct_robot),
+         pct_ai=ifelse(censusocc00=="First-line supervisors of protective service workers, all other",29,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Psychologists",30,pct_software),
+         pct_robot=ifelse(censusocc00=="Psychologists",11,pct_robot),
+         pct_ai=ifelse(censusocc00=="Psychologists",85,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Broadcast and sound engineering technicians and radio",100,pct_software),
+         pct_robot=ifelse(censusocc00=="Broadcast and sound engineering technicians and radio",77,pct_robot),
+         pct_ai=ifelse(censusocc00=="Broadcast and sound engineering technicians and radio",82,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Models, demonstrators, and product promoters",5,pct_software),
+         pct_robot=ifelse(censusocc00=="Models, demonstrators, and product promoters",18,pct_robot),
+         pct_ai=ifelse(censusocc00=="Models, demonstrators, and product promoters",2,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Athletes, coaches, umpires, and related workers",27,pct_software),
+         pct_robot=ifelse(censusocc00=="Athletes, coaches, umpires, and related workers",54,pct_robot),
+         pct_ai=ifelse(censusocc00=="Athletes, coaches, umpires, and related workers",52,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Credit counselors and loan officers",37,pct_software),
+         pct_robot=ifelse(censusocc00=="Credit counselors and loan officers",16,pct_robot),
+         pct_ai=ifelse(censusocc00=="Credit counselors and loan officers",81,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Musicians, singers, and related workers",13,pct_software),
+         pct_robot=ifelse(censusocc00=="Musicians, singers, and related workers",9,pct_robot),
+         pct_ai=ifelse(censusocc00=="Musicians, singers, and related workers",28,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Judges, magistrates, and other judicial workers",40,pct_software),
+         pct_robot=ifelse(censusocc00=="Judges, magistrates, and other judicial workers",16,pct_robot),
+         pct_ai=ifelse(censusocc00=="Judges, magistrates, and other judicial workers",79,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer systems analysts",70,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer systems analysts",32,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer systems analysts",83,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Managers, all other",50,pct_software),
+         pct_robot=ifelse(censusocc00=="Managers, all other",26,pct_robot),
+         pct_ai=ifelse(censusocc00=="Managers, all other",68,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Surveyors, cartographers, and photogrammetrists",7,pct_software),
+         pct_robot=ifelse(censusocc00=="Surveyors, cartographers, and photogrammetrists",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Surveyors, cartographers, and photogrammetrists",14,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Computer occupations, all other",84,pct_software),
+         pct_robot=ifelse(censusocc00=="Computer occupations, all other",61,pct_robot),
+         pct_ai=ifelse(censusocc00=="Computer occupations, all other",68,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Medical, dental, and ophthalmic laboratory technicians",87,pct_software),
+         pct_robot=ifelse(censusocc00=="Medical, dental, and ophthalmic laboratory technicians",53,pct_robot),
+         pct_ai=ifelse(censusocc00=="Medical, dental, and ophthalmic laboratory technicians",100,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Compensation, benefits, and job analysis specialists",10,pct_software),
+         pct_robot=ifelse(censusocc00=="Compensation, benefits, and job analysis specialists",6,pct_robot),
+         pct_ai=ifelse(censusocc00=="Compensation, benefits, and job analysis specialists",44,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Biological scientists",62,pct_software),
+         pct_robot=ifelse(censusocc00=="Biological scientists",52,pct_robot),
+         pct_ai=ifelse(censusocc00=="Biological scientists",82,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Farmers, ranchers, and other agricultural managers",94,pct_software),
+         pct_robot=ifelse(censusocc00=="Farmers, ranchers, and other agricultural managers",55,pct_robot),
+         pct_ai=ifelse(censusocc00=="Farmers, ranchers, and other agricultural managers",94,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="First-line supervisors of personal service workers",15,pct_software),
+         pct_robot=ifelse(censusocc00=="First-line supervisors of personal service workers",9,pct_robot),
+         pct_ai=ifelse(censusocc00=="First-line supervisors of personal service workers",21,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="First-line supervisors of farming, fishing, and forestry workers",94,pct_software),
+         pct_robot=ifelse(censusocc00=="First-line supervisors of farming, fishing, and forestry workers",55,pct_robot),
+         pct_ai=ifelse(censusocc00=="First-line supervisors of farming, fishing, and forestry workers",94,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Archivists, curators, and museum technicians",7,pct_software),
+         pct_robot=ifelse(censusocc00=="Archivists, curators, and museum technicians",13,pct_robot),
+         pct_ai=ifelse(censusocc00=="Archivists, curators, and museum technicians",28,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Pumping station operators",98,pct_software),
+         pct_robot=ifelse(censusocc00=="Pumping station operators",80,pct_robot),
+         pct_ai=ifelse(censusocc00=="Pumping station operators",92,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Social and community service managers",20,pct_software),
+         pct_robot=ifelse(censusocc00=="Social and community service managers",17,pct_robot),
+         pct_ai=ifelse(censusocc00=="Social and community service managers",60,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Information security analysts",71,pct_software),
+         pct_robot=ifelse(censusocc00=="Information security analysts",49,pct_robot),
+         pct_ai=ifelse(censusocc00=="Information security analysts",59,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Print binding and finishing workers",97,pct_software),
+         pct_robot=ifelse(censusocc00=="Print binding and finishing workers",81,pct_robot),
+         pct_ai=ifelse(censusocc00=="Print binding and finishing workers",89,pct_ai),
+         
+         pct_software=ifelse(censusocc00=="Carpet, floor, and tile installers and finishers",49,pct_software),
+         pct_robot=ifelse(censusocc00=="Carpet, floor, and tile installers and finishers",92,pct_robot),
+         pct_ai=ifelse(censusocc00=="Carpet, floor, and tile installers and finishers",35,pct_ai)
+         )
+
+##Fill NA Computerization Frey-Osborne
+gss9<-gss9%>%
+  mutate(computefrey=ifelse(censusocc00=="Registered nurses",0.058,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Managers, all other",0.16,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Health practitioner support technologists and technicians",0.9,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Supervisors of transportation and material moving workers",0.029,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Computer support specialists",0.65,computefrey),
+         
+         computefrey=ifelse(censusocc00=="First-line supervisors of non-retail sales workers",0.075,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Marketing and sales managers",0.61,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Postsecondary teachers",0.032,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Financial managers",0.016,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Computer and information systems managers",0.03,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Miscellaneous plant and system operators",0.86,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Web developers",0.48,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Human resources managers",0.9,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Medical and health services managers",0.16,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Other transportation workers",0.75,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Computer network architects",0.0065,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Education administrators",0.025,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Construction managers",0.17,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Food service managers",0.63,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Physicians and surgeons",0.0042,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Door-to-door sales workers, news and street vendors, and related workers",0.94,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Physical scientists, all other",0.43,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Entertainers and performers, sports and related workers, all other",0.035,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Industrial production managers",0.16,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Miscellaneous life, physical, and social science technicians",0.61,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Miscellaneous agricultural workers",0.87,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Electrical and electronics repairers, industrial and utility",0.62,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Other education, training, and library workers",0.99,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Architectural and engineering managers",0.16,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Gaming managers",0.28,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Compensation and benefits managers",0.47,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Transportation, storage, and distribution managers",0.029,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Lodging managers",0.94,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Purchasing managers",0.77,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Training and development managers",0.014,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Computer occupations, all other",0.65,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Public relations and fundraising managers",0.18,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Molders, shapers, and casters, except metal and plastic",0.9,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Nurse practitioners",0.058,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Religious workers, all other",0.025,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Farmers, ranchers, and other agricultural managers",0.57,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Social and community service managers",0.13,computefrey),
+         
+         computefrey=ifelse(censusocc00=="First-line supervisors of personal service workers",0.076,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Administrative services managers",0.014,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Textile, apparel, and furnishings workers, all other",0.81,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Information security analysts",0.015,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Nurse anesthetists",0.058,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Railroad conductors and yardmasters",0.83,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Funeral service managers",0.37,computefrey),
+         
+         computefrey=ifelse(censusocc00=="Postmasters and mail superintendents",0.68,computefrey)
+         )
+
+##Fill missing ONet measures
+gss9<-gss9%>%
+  mutate(decline=ifelse(censusocc00=="Health practitioner support technologists and technicians",0,decline),
+         declineord=ifelse(censusocc00=="Health practitioner support technologists and technicians",0,declineord),
+         
+         decline=ifelse(censusocc00=="First-line supervisors of non-retail sales workers",1,decline),
+         declineord=ifelse(censusocc00=="First-line supervisors of non-retail sales workers",5,declineord),
+         
+         decline=ifelse(censusocc00=="Purchasing agents, except wholesale, retail, and farm products",1,decline),
+         declineord=ifelse(censusocc00=="Purchasing agents, except wholesale, retail, and farm products",5,declineord),
+         
+         decline=ifelse(censusocc00=="Miscellaneous plant and system operators",0,decline),
+         declineord=ifelse(censusocc00=="Miscellaneous plant and system operators",4,declineord),
+         
+         decline=ifelse(censusocc00=="Miscellaneous assemblers and fabricators",1,decline),
+         declineord=ifelse(censusocc00=="Miscellaneous assemblers and fabricators",5,declineord),
+         
+         decline=ifelse(censusocc00=="Other transportation workers",0,decline),
+         declineord=ifelse(censusocc00=="Other transportation workers",1,declineord),
+         
+         decline=ifelse(censusocc00=="Door-to-door sales workers, news and street vendors, and related workers",0,decline),
+         declineord=ifelse(censusocc00=="Door-to-door sales workers, news and street vendors, and related workers",2,declineord),
+         
+         decline=ifelse(censusocc00=="Physical scientists, all other",0,decline),
+         declineord=ifelse(censusocc00=="Physical scientists, all other",3,declineord),
+         
+         decline=ifelse(censusocc00=="Clinical laboratory technologists and technicians",0,decline),
+         declineord=ifelse(censusocc00=="Clinical laboratory technologists and technicians",0,declineord),
+         
+         decline=ifelse(censusocc00=="Miscellaneous life, physical, and social science technicians",0,decline),
+         declineord=ifelse(censusocc00=="Miscellaneous life, physical, and social science technicians",1,declineord),
+         
+         decline=ifelse(censusocc00=="Wholesale and retail buyers, except farm products",1,decline),
+         declineord=ifelse(censusocc00=="Wholesale and retail buyers, except farm products",5,declineord),
+         
+         decline=ifelse(censusocc00=="Electrical and electronics repairers, industrial and utility",0,decline),
+         declineord=ifelse(censusocc00=="Electrical and electronics repairers, industrial and utility",4,declineord),
+         
+         decline=ifelse(censusocc00=="Other education, training, and library workers",0,decline),
+         declineord=ifelse(censusocc00=="Other education, training, and library workers",2,declineord),
+         
+         decline=ifelse(censusocc00=="Molders, shapers, and casters, except metal and plastic",0,decline),
+         declineord=ifelse(censusocc00=="Molders, shapers, and casters, except metal and plastic",3,declineord),
+         
+         decline=ifelse(censusocc00=="First-line supervisors of personal service workers",0,decline),
+         declineord=ifelse(censusocc00=="First-line supervisors of personal service workers",0,declineord),
+         
+         decline=ifelse(censusocc00=="Railroad conductors and yardmasters",0,decline),
+         declineord=ifelse(censusocc00=="Railroad conductors and yardmasters",4,declineord)
+         )
+
+##Add back declineord as factor, i.e. much faster than average etc.
+gss9$declinefac<-ifelse(gss9$declineord<=0.5,"Much faster than average",
+                  ifelse(gss9$declineord<=1.5,"Faster than average",
+                  ifelse(gss9$declineord<=2.5,"Average",
+                  ifelse(gss9$declineord<=3.5,"Slower than average",
+                  ifelse(gss9$declineord<=4.5,"Little or no change",
+                  "Decline")))))
+gss9$declinefac<-as.factor(gss9$declinefac)
+declinefac<-gss9$declinefac
+gss9$declinefac<-ordered(gss9$declinefac, c("Much faster than average", "Faster than average", "Average", "Slower than average", "Little or no change", "Decline"))
+
+##divide Webb variables by 100
+gss9<-gss9%>%
+  mutate(pct_software=pct_software/100,
+         pct_robot=pct_robot/100,
+         pct_ai=pct_ai/100)
+#write.csv(gss9, "gss9.csv")
+```
+
+```{r}
+##create mean values
+stressmean<-gss9%>%
+  group_by(stressn)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:5)
+
+satjobmean<-gss9%>%
+  group_by(satjob1n)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:4)
+
+healthmean<-gss9%>%
+  group_by(health1n)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:5)
+
+jobsecokmean<-gss9%>%
+  group_by(jobsecokn)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:4)
+
+fringemean<-gss9%>%
+  group_by(fringeokn)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:4)
+
+secondwkmean<-gss9%>%
+  group_by(secondwkd)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:2)
+
+famwkoffmean<-gss9%>%
+  group_by(famwkoffn)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:4)
+
+fullmean<-gss9%>%
+  group_by(fulld)%>%
+  summarize(meancompute=mean(computefrey, na.rm=TRUE),
+            meansoftware=mean(pct_software, na.rm=TRUE),
+            meanrobot=mean(pct_robot, na.rm=TRUE),
+            meanai=mean(pct_ai, na.rm=TRUE),
+            meanko=mean(ko_ratio, na.rm=TRUE),
+            meankl=mean(kl_ratio, na.rm=TRUE),
+            meandecline=mean(decline, na.rm=TRUE),
+            meandeclineord=mean(declineord, na.rm=TRUE))%>%
+  filter(row_number() %in% 1:2)
+```
+
+##Correlation plots
+```{r}
+##Computerization
+ggplot(data=gss9, aes(x=computefrey, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meancompute, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meancompute, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and General Health")+
+  geom_point(data=healthmean, aes(x=meancompute, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meancompute, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meancompute, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meancompute, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meancompute, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=computefrey, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Computerization and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meancompute, y=fulld), color="red")
+
+##Percentile software (Webb)
+ggplot(data=gss9, aes(x=pct_software, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meansoftware, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meansoftware, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and General Health")+
+  geom_point(data=healthmean, aes(x=meansoftware, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meansoftware, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meansoftware, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meansoftware, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meansoftware, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=pct_software, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Software Percentile and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meansoftware, y=fulld), color="red")
+
+##Percentile Robot
+ggplot(data=gss9, aes(x=pct_robot, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meanrobot, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meanrobot, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and General Health")+
+  geom_point(data=healthmean, aes(x=meanrobot, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meanrobot, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meanrobot, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meanrobot, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meanrobot, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=pct_robot, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Robot Percentile and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meanrobot, y=fulld), color="red")
+
+##Percentile AI
+ggplot(data=gss9, aes(x=pct_ai, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meanai, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meanai, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and General Health")+
+  geom_point(data=healthmean, aes(x=meanai, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meanai, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meanai, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meanai, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meanai, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=pct_ai, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: AI Percentile and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meanai, y=fulld), color="red")
+
+##Capital-output ratio
+ggplot(data=gss9, aes(x=ko_ratio, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meanko, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meanko, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and General Health")+
+  geom_point(data=healthmean, aes(x=meanko, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meanko, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meanko, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meanko, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meanko, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=ko_ratio, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Capital Output Ratio and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meanko, y=fulld), color="red")
+
+##Capital labor ratio
+ggplot(data=gss9, aes(x=kl_ratio, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meankl, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meankl, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and General Health")+
+  geom_point(data=healthmean, aes(x=meankl, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meankl, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meankl, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meankl, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meankl, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=kl_ratio, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Capital Labor Ratio and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meankl, y=fulld), color="red")
+
+##Declining Job Outlook
+ggplot(data=gss9, aes(x=decline, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meandecline, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meandecline, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and General Health")+
+  geom_point(data=healthmean, aes(x=meandecline, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meandecline, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meandecline, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meandecline, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meandecline, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=decline, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meandecline, y=fulld), color="red")
+
+##Declining Job Outlook, Ordinal
+ggplot(data=gss9, aes(x=declineord, y=stressn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Stressful Work")+
+  geom_point(data=stressmean, aes(x=meandeclineord, y=stressn), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=satjob1n))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Satisfying Work")+
+  geom_point(data=satjobmean, aes(x=meandeclineord, y=satjob1n), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=health1n))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and General Health")+
+  geom_point(data=healthmean, aes(x=meandeclineord, y=health1n), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=jobsecokn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Job Security")+
+  geom_point(data=jobsecokmean, aes(x=meandeclineord, y=jobsecokn), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=fringeokn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Good Fringe Benefits")+
+  geom_point(data=fringemean, aes(x=meandeclineord, y=fringeokn), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=secondwkd))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Having Second Job")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=secondwkmean, aes(x=meandeclineord, y=secondwkd), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=famwkoffn))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Difficulty of Time Off")+
+  geom_point(data=famwkoffmean, aes(x=meandeclineord, y=famwkoffn), color="red")
+
+ggplot(data=gss9, aes(x=declineord, y=fulld))+
+  geom_point()+
+  ggtitle("Correlation: Declining Job Outlook Ordinal and Full-Time Work")+
+  scale_y_continuous(breaks=seq(0,1,1))+
+  geom_point(data=fullmean, aes(x=meandeclineord, y=fulld), color="red")
+```
+

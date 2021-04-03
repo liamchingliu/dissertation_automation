@@ -1,0 +1,1269 @@
+---
+title: "Automation-Job Quality Regression Output"
+output: pdf_document
+---
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(foreign)
+library(dplyr)
+library(reshape2)
+library(naniar)
+library(ggplot2)
+library(plm)
+#https://cran.r-project.org/web/packages/outreg/outreg.pdf
+#https://github.com/kota7/outreg/blob/master/README.md
+library(outreg)
+library(texreg)
+library(stargazer)
+```
+
+```{r, echo=FALSE}
+setwd("/Volumes/LARRYLIU/iclouddrive/Automation Work Project")
+##Load gss9.csv
+gss9<-read.csv("gss9.csv")
+
+##create new variable: Capital labor ratio with top 5 percentiles cut out
+kl_ratio95<-gss9[gss9$kl_ratio<quantile(gss9$kl_ratio,0.95, na.rm=TRUE),]
+kl_ratio95<-select(kl_ratio95, X, kl_ratio)
+kl_ratio95<-rename(kl_ratio95, kl_ratio95=kl_ratio)
+gss9<-merge(gss9, kl_ratio95, by='X', all.x=TRUE)
+```
+
+#Regression Models
+
+##Explanatory Variables: Automation
+
+1.Computerization Probability (Frey and Osborne 2013)
+
+2.Percentile software/100 (Webb 2020)
+
+3.Percentile robot/100 (Webb 2020)
+
+4.Percentile AI/100 (Webb 2020)
+
+5.Capital-Output Ratio (World KLEMS)
+
+6.Capital-Labor Ratio (World KLEMS)
+
+7.Declining Job Outlook (O*Net): (a) Binary (1: Declining, 0: All Other), (b) Ordinal (5: Declining, 4: Little or no Change, 3: Slower than Average, 2: Average, 1: Faster than Average, 0: Much faster than Average)
+
+##Dependent Variables: Job Quality
+
+1.Stress: How often does r find work stressful; (a) dichotomous, StressD (0: "Never", "Hardly ever", "Sometimes", 1: "Often", "Always"), (b) ordinal, StressN (0: "Never", 1: "Hardly ever", 2: "Sometimes", 3: "Often", 4: "Always")
+
+2.Job Satisafaction: Job satisfaction in general; (a) dichotomous, JobSatD (0:"Not at all satisfied", "Not too satisfied", 1: "Somewhat satisfied", "Very satisfied"), (b) ordinal, JobSatN (0:"Not at all satisfied", 1:"Not too satisfied", 2:"Somewhat satisfied", 3:"Very satisfied")
+
+3: Self-rated Health: Rs health in general; (a) dichotomous, HealthD (0: "Poor", 1: "Fair", "Good", "Very good", "Excellent"), (b) ordinal, HealthN (0: "Poor", 1: "Fair", 2:"Good", 3:"Very good", 4:"Excellent")
+
+4: Job Security: The job security is good; (a) dichotomous, JobSecD (0:"Not at all true", "Not too true", 1: "Somewhat true", "Very true"), ordinal, JobSecN (0:"Not at all true", 1:"Not too true", 2:"Somewhat true", 3:"Very true")
+
+5: Fringe benefits are good; (a) dichotomous, FringeD (0:"Not at all true", "Not too true", 1: "Somewhat true", "Very true"), (b) ordinal, FringeN (0:"Not at all true", 1:"Not too true", 2:"Somewhat true", 3:"Very true")
+
+6: Second Job: R has job other than main; dichotomous, SecJobD (0:"No", 1:"Yes")
+
+7:Family Leave: How hard to take time off; (a) dichotomous, TimeOffD (0: "Very hard", "Somewhat hard", 1: "Not too hard", "Not at all hard"), (b) ordinal, TimeOffN (0: "Very hard", 1:"Somewhat hard", 2:"Not too hard", 3:"Not at all hard")
+
+8:Full-time work: Was r's work part-time or full-time?, dichotomous, FullD (0: "Part-time", 1: "Full-time")
+
+##Models
+
+OLS for ordinal dependent variables. Logistic regression for dichotomous dependent variables.
+
+Table 1: Descriptive Statistics
+
+Table 2 and 3: Computerization and Job Quality 
+
+Table 4 and 5: Computerization and Job Quality, Year Interaction
+
+Table 6 and 7: Webb-Software Percentile and Job Quality
+
+Table 8 and 9: Webb-Software Percentile and Job Quality, Year Interaction
+
+Table 10 and 11: Webb-Robot Percentile and Job Quality
+
+Table 12 and 13: Webb-Robot Percentile and Job Quality, Year Interaction
+
+Table 14 and 15: Webb-AI Percentile and Job Quality
+
+Table 16 and 17: Webb-AI Percentile and Job Quality, Year Interaction
+
+Table 18 and 19: Capital-Output Ratio and Job Quality
+
+Table 20 and 21: Capital-Output Ratio and Job Quality, Year Interaction
+
+Table 22 and 23: Capital-Labor Ratio and Job Quality
+
+Table 24 and 25: Capital-Labor Ratio and Job Quality, Year Interaction
+
+Table 26 and 27: Declining Job Outlook Binary and Job Quality
+
+Table 28 and 29: Declining Job Outlook Binary and Job Quality, Year Interaction
+
+Table 30 and 31: Declining Job Outlook Ordinal and Job Quality
+
+Table 32 and 33: Declining Job Outlook Ordinal and Job Quality, Year Interaction
+
+```{r, echo=FALSE}
+descriptive<-select(gss9, stressn, satjob1n, health1n, jobsecokn,
+                    fringeokn, secondwkd, famwkoffn, fulld, rincomed,
+                    blackraced, femalesexd, colleged, computefrey,
+                    pct_software, pct_robot, pct_ai, ko_ratio, 
+                    kl_ratio95, declineord)
+colnames(descriptive)<-c("Stress", "Job Satisfaction", "Self-rated health",
+                         "Job Security", "Good Fringe Benefits",
+                         "Have Second Job", "Can take Family Leave",
+                         "Full-time Work", "Income above $25K",
+                         "Black", "Female", "4Y College", 
+                         "Computerization Probability", 
+                         "Percentile Software", "Percentile Robot",
+                         "Percentile AI", "Capital-Output Ratio",
+                         "Capital-Labor Ratio", "Declining Job Outlook")
+```
+
+```{r, results='asis', echo=FALSE}
+##Table 1: 
+stargazer(as.data.frame(descriptive), title="Descriptive statistics",
+          type="html", digits=2, omit.summary.stat=c("p25", "p75"), 
+          header=FALSE, out="descriptive.doc")
+```
+
+```{r, echo=FALSE}
+##Base
+computestressd<-glm(stressd~computefrey+rincomed+blackraced+
+                    femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+computestressn<-lm(stressn~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+computesatjob1d<-glm(satjob1d~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                     family=binomial(link="logit"))
+computesatjob1n<-lm(satjob1n~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+computehealth1d<-glm(health1d~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+computehealth1n<-lm(health1n~computefrey+rincomed+blackraced+
+                     femalesexd+colleged, data=gss9)
+computejobsecokd<-glm(jobsecokd~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+computejobsecokn<-lm(jobsecokn~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+computefringeokd<-glm(fringeokd~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+computefringeokn<-lm(fringeokn~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+computesecondwkd<-glm(secondwkd~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+computefamwkoffd<-glm(famwkoffd~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+computefamwkoffn<-lm(famwkoffn~computefrey+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+ycomputestressd<-glm(stressd~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputestressn<-lm(stressn~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ycomputesatjob1d<-glm(satjob1d~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputesatjob1n<-lm(satjob1n~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ycomputehealth1d<-glm(health1d~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputehealth1n<-lm(health1n~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ycomputejobsecokd<-glm(jobsecokd~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputejobsecokn<-lm(jobsecokn~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ycomputefringeokd<-glm(fringeokd~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputefringeokn<-lm(fringeokn~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ycomputesecondwkd<-glm(secondwkd~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputefamwkoffd<-glm(famwkoffd~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ycomputefamwkoffn<-lm(famwkoffn~computefrey*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base
+softwarestressd<-glm(stressd~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwarestressn<-lm(stressn~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+softwaresatjob1d<-glm(satjob1d~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwaresatjob1n<-lm(satjob1n~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+softwarehealth1d<-glm(health1d~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwarehealth1n<-lm(health1n~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+softwarejobsecokd<-glm(jobsecokd~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwarejobsecokn<-lm(jobsecokn~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+softwarefringeokd<-glm(fringeokd~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwarefringeokn<-lm(fringeokn~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+softwaresecondwkd<-glm(secondwkd~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwarefamwkoffd<-glm(famwkoffd~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+softwarefamwkoffn<-lm(famwkoffn~pct_software+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+ysoftwarestressd<-glm(stressd~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwarestressn<-lm(stressn~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ysoftwaresatjob1d<-glm(satjob1d~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwaresatjob1n<-lm(satjob1n~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ysoftwarehealth1d<-glm(health1d~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwarehealth1n<-lm(health1n~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ysoftwarejobsecokd<-glm(jobsecokd~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwarejobsecokn<-lm(jobsecokn~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ysoftwarefringeokd<-glm(fringeokd~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwarefringeokn<-lm(fringeokn~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ysoftwaresecondwkd<-glm(secondwkd~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwarefamwkoffd<-glm(famwkoffd~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ysoftwarefamwkoffn<-lm(famwkoffn~pct_software*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base
+robotstressd<-glm(stressd~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robotstressn<-lm(stressn~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+robotsatjob1d<-glm(satjob1d~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robotsatjob1n<-lm(satjob1n~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+robothealth1d<-glm(health1d~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robothealth1n<-lm(health1n~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+robotjobsecokd<-glm(jobsecokd~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robotjobsecokn<-lm(jobsecokn~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+robotfringeokd<-glm(fringeokd~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robotfringeokn<-lm(fringeokn~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+robotsecondwkd<-glm(secondwkd~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robotfamwkoffd<-glm(famwkoffd~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+robotfamwkoffn<-lm(famwkoffn~pct_robot+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+yrobotstressd<-glm(stressd~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobotstressn<-lm(stressn~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yrobotsatjob1d<-glm(satjob1d~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobotsatjob1n<-lm(satjob1n~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yrobothealth1d<-glm(health1d~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobothealth1n<-lm(health1n~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yrobotjobsecokd<-glm(jobsecokd~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobotjobsecokn<-lm(jobsecokn~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yrobotfringeokd<-glm(fringeokd~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobotfringeokn<-lm(fringeokn~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yrobotsecondwkd<-glm(secondwkd~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobotfamwkoffd<-glm(famwkoffd~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yrobotfamwkoffn<-lm(famwkoffn~pct_robot*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base
+aistressd<-glm(stressd~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aistressn<-lm(stressn~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+aisatjob1d<-glm(satjob1d~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aisatjob1n<-lm(satjob1n~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+aihealth1d<-glm(health1d~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aihealth1n<-lm(health1n~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+aijobsecokd<-glm(jobsecokd~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aijobsecokn<-lm(jobsecokn~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+aifringeokd<-glm(fringeokd~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aifringeokn<-lm(fringeokn~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+aisecondwkd<-glm(secondwkd~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aifamwkoffd<-glm(famwkoffd~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+aifamwkoffn<-lm(famwkoffn~pct_ai+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+yaistressd<-glm(stressd~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaistressn<-lm(stressn~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yaisatjob1d<-glm(satjob1d~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaisatjob1n<-lm(satjob1n~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yaihealth1d<-glm(health1d~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaihealth1n<-lm(health1n~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yaijobsecokd<-glm(jobsecokd~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaijobsecokn<-lm(jobsecokn~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yaifringeokd<-glm(fringeokd~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaifringeokn<-lm(fringeokn~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yaisecondwkd<-glm(secondwkd~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaifamwkoffd<-glm(famwkoffd~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yaifamwkoffn<-lm(famwkoffn~pct_ai*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base
+kostressd<-glm(stressd~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kostressn<-lm(stressn~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+kosatjob1d<-glm(satjob1d~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kosatjob1n<-lm(satjob1n~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+kohealth1d<-glm(health1d~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kohealth1n<-lm(health1n~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+kojobsecokd<-glm(jobsecokd~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kojobsecokn<-lm(jobsecokn~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+kofringeokd<-glm(fringeokd~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kofringeokn<-lm(fringeokn~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+kosecondwkd<-glm(secondwkd~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kofamwkoffd<-glm(famwkoffd~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kofamwkoffn<-lm(famwkoffn~ko_ratio+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+ykostressd<-glm(stressd~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykostressn<-lm(stressn~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykosatjob1d<-glm(satjob1d~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykosatjob1n<-lm(satjob1n~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykohealth1d<-glm(health1d~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykohealth1n<-lm(health1n~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykojobsecokd<-lm(jobsecokd~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykojobsecokn<-lm(jobsecokn~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykofringeokd<-glm(fringeokd~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykofringeokn<-lm(fringeokn~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykosecondwkd<-glm(secondwkd~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykofamwkoffd<-glm(famwkoffd~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykofamwkoffn<-lm(famwkoffn~ko_ratio*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base: Capital-Labor Ratio
+klstressd<-glm(stressd~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+klstressn<-lm(stressn~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+klsatjob1d<-glm(satjob1d~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+klsatjob1n<-lm(satjob1n~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+klhealth1d<-glm(health1d~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+klhealth1n<-lm(health1n~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+kljobsecokd<-glm(jobsecokd~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+kljobsecokn<-lm(jobsecokn~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+klfringeokd<-glm(fringeokd~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+klfringeokn<-lm(fringeokn~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+klsecondwkd<-glm(secondwkd~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+klfamwkoffd<-glm(famwkoffd~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+klfamwkoffn<-lm(famwkoffn~kl_ratio95+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+yklstressd<-glm(stressd~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yklstressn<-lm(stressn~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yklsatjob1d<-glm(satjob1d~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yklsatjob1n<-lm(satjob1n~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yklhealth1d<-glm(health1d~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yklhealth1n<-lm(health1n~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ykljobsecokd<-glm(jobsecokd~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ykljobsecokn<-lm(jobsecokn~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yklfringeokd<-glm(fringeokd~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yklfringeokn<-lm(fringeokn~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+yklsecondwkd<-glm(secondwkd~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yklfamwkoffd<-glm(famwkoffd~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+yklfamwkoffn<-lm(famwkoffn~kl_ratio95*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base
+declinestressd<-glm(stressd~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinestressn<-lm(stressn~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declinesatjob1d<-glm(satjob1d~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinesatjob1n<-lm(satjob1n~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declinehealth1d<-glm(health1d~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinehealth1n<-lm(health1n~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declinejobsecokd<-glm(jobsecokd~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinejobsecokn<-lm(jobsecokn~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declinefringeokd<-glm(fringeokd~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinefringeokn<-lm(fringeokn~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declinesecondwkd<-glm(secondwkd~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinefamwkoffd<-glm(famwkoffd~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declinefamwkoffn<-lm(famwkoffn~decline+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+ydeclinestressd<-glm(stressd~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinestressn<-lm(stressn~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclinesatjob1d<-glm(satjob1d~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinesatjob1n<-lm(satjob1n~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclinehealth1d<-glm(health1d~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinehealth1n<-lm(health1n~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclinejobsecokd<-glm(jobsecokd~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinejobsecokn<-lm(jobsecokn~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclinefringeokd<-glm(fringeokd~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinefringeokn<-lm(fringeokn~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclinesecondwkd<-glm(secondwkd~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinefamwkoffd<-glm(famwkoffd~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclinefamwkoffn<-lm(famwkoffn~decline*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##Base
+declineordstressd<-glm(stressd~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordstressn<-lm(stressn~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declineordsatjob1d<-glm(satjob1d~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordsatjob1n<-lm(satjob1n~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declineordhealth1d<-glm(health1d~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordhealth1n<-lm(health1n~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declineordjobsecokd<-glm(jobsecokd~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordjobsecokn<-lm(jobsecokn~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declineordfringeokd<-glm(fringeokd~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordfringeokn<-lm(fringeokn~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+declineordsecondwkd<-glm(secondwkd~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordfamwkoffd<-glm(famwkoffd~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+declineordfamwkoffn<-lm(famwkoffn~declineord+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+
+##Year Interaction
+ydeclineordstressd<-glm(stressd~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordstressn<-lm(stressn~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclineordsatjob1d<-glm(satjob1d~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordsatjob1n<-lm(satjob1n~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclineordhealth1d<-glm(health1d~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordhealth1n<-lm(health1n~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclineordjobsecokd<-glm(jobsecokd~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordjobsecokn<-lm(jobsecokn~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclineordfringeokd<-glm(fringeokd~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordfringeokn<-lm(fringeokn~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+ydeclineordsecondwkd<-glm(secondwkd~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordfamwkoffd<-glm(famwkoffd~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9, 
+                    family=binomial(link="logit"))
+ydeclineordfamwkoffn<-lm(famwkoffn~declineord*year+rincomed+blackraced+
+                     femalesexd+colleged+fulld, data=gss9)
+```
+
+```{r, echo=FALSE}
+##create list of regression
+##Base Computerization, Frey-Osborne
+computelist1<-list(computestressd,
+                  computestressn,
+                  computesatjob1d,
+                  computesatjob1n,
+                  computehealth1d,
+                  computehealth1n,
+                  computejobsecokd)
+
+computelist2<-list(computejobsecokn,
+                  computefringeokd,
+                  computefringeokn,
+                  computesecondwkd,
+                  computefamwkoffd,
+                  computefamwkoffn)
+
+##Year-Interaction, Computerization
+ycomputelist1<-list(ycomputestressd,
+                    ycomputestressn,
+                    ycomputesatjob1d,
+                    ycomputesatjob1n,
+                    ycomputehealth1d,
+                    ycomputehealth1n,
+                    ycomputejobsecokd)
+ycomputelist2<-list(ycomputejobsecokn,
+                    ycomputefringeokd,
+                    ycomputefringeokn,
+                    ycomputesecondwkd,
+                    ycomputefamwkoffd,
+                    ycomputefamwkoffn)
+
+##Base Webb-Software
+softwarelist1<-list(softwarestressd,
+                  softwarestressn,
+                  softwaresatjob1d,
+                  softwaresatjob1n,
+                  softwarehealth1d,
+                  softwarehealth1n,
+                  softwarejobsecokd)
+
+softwarelist2<-list(softwarejobsecokn,
+                  softwarefringeokd,
+                  softwarefringeokn,
+                  softwaresecondwkd,
+                  softwarefamwkoffd,
+                  softwarefamwkoffn)
+
+##Year-Interaction, Webb-Software
+ysoftwarelist1<-list(ysoftwarestressd,
+                    ysoftwarestressn,
+                    ysoftwaresatjob1d,
+                    ysoftwaresatjob1n,
+                    ysoftwarehealth1d,
+                    ysoftwarehealth1n,
+                    ysoftwarejobsecokd)
+ysoftwarelist2<-list(ysoftwarejobsecokn,
+                    ysoftwarefringeokd,
+                    ysoftwarefringeokn,
+                    ysoftwaresecondwkd,
+                    ysoftwarefamwkoffd,
+                    ysoftwarefamwkoffn)
+
+##Base Robots-Webb
+robotlist1<-list(robotstressd,
+                  robotstressn,
+                  robotsatjob1d,
+                  robotsatjob1n,
+                  robothealth1d,
+                  robothealth1n,
+                  robotjobsecokd)
+
+robotlist2<-list(robotjobsecokn,
+                  robotfringeokd,
+                  robotfringeokn,
+                  robotsecondwkd,
+                  robotfamwkoffd,
+                  robotfamwkoffn)
+
+##Year-Interaction, Robots-Webb
+yrobotlist1<-list(yrobotstressd,
+                    yrobotstressn,
+                    yrobotsatjob1d,
+                    yrobotsatjob1n,
+                    yrobothealth1d,
+                    yrobothealth1n,
+                    yrobotjobsecokd)
+yrobotlist2<-list(yrobotjobsecokn,
+                    yrobotfringeokd,
+                    yrobotfringeokn,
+                    yrobotsecondwkd,
+                    yrobotfamwkoffd,
+                    yrobotfamwkoffn)
+
+##Base AI-Webb
+ailist1<-list(aistressd,
+                  aistressn,
+                  aisatjob1d,
+                  aisatjob1n,
+                  aihealth1d,
+                  aihealth1n,
+                  aijobsecokd)
+
+ailist2<-list(aijobsecokn,
+                  aifringeokd,
+                  aifringeokn,
+                  aisecondwkd,
+                  aifamwkoffd,
+                  aifamwkoffn)
+
+##Year-Interaction, AI-Webb
+yailist1<-list(yaistressd,
+                    yaistressn,
+                    yaisatjob1d,
+                    yaisatjob1n,
+                    yaihealth1d,
+                    yaihealth1n,
+                    yaijobsecokd)
+yailist2<-list(yaijobsecokn,
+                    yaifringeokd,
+                    yaifringeokn,
+                    yaisecondwkd,
+                    yaifamwkoffd,
+                    yaifamwkoffn)
+
+##Base KO-ratio
+kolist1<-list(kostressd,
+                  kostressn,
+                  kosatjob1d,
+                  kosatjob1n,
+                  kohealth1d,
+                  kohealth1n,
+                  kojobsecokd)
+
+kolist2<-list(kojobsecokn,
+                  kofringeokd,
+                  kofringeokn,
+                  kosecondwkd,
+                  kofamwkoffd,
+                  kofamwkoffn)
+
+##Year-Interaction, KO-Ratio
+ykolist1<-list(ykostressd,
+                    ykostressn,
+                    ykosatjob1d,
+                    ykosatjob1n,
+                    ykohealth1d,
+                    ykohealth1n,
+                    ykojobsecokd)
+ykolist2<-list(ykojobsecokn,
+                    ykofringeokd,
+                    ykofringeokn,
+                    ykosecondwkd,
+                    ykofamwkoffd,
+                    ykofamwkoffn)
+
+##Base, KL-Ratio
+kllist1<-list(klstressd,
+                  klstressn,
+                  klsatjob1d,
+                  klsatjob1n,
+                  klhealth1d,
+                  klhealth1n,
+                  kljobsecokd)
+
+kllist2<-list(kljobsecokn,
+                  klfringeokd,
+                  klfringeokn,
+                  klsecondwkd,
+                  klfamwkoffd,
+                  klfamwkoffn)
+
+##Year-Interaction, Computerization
+ykllist1<-list(yklstressd,
+                    yklstressn,
+                    yklsatjob1d,
+                    yklsatjob1n,
+                    yklhealth1d,
+                    yklhealth1n,
+                    ykljobsecokd)
+ykllist2<-list(ykljobsecokn,
+                    yklfringeokd,
+                    yklfringeokn,
+                    yklsecondwkd,
+                    yklfamwkoffd,
+                    yklfamwkoffn)
+
+##Base Declining Outlook
+declinelist1<-list(declinestressd,
+                  declinestressn,
+                  declinesatjob1d,
+                  declinesatjob1n,
+                  declinehealth1d,
+                  declinehealth1n,
+                  declinejobsecokd)
+
+declinelist2<-list(declinejobsecokn,
+                  declinefringeokd,
+                  declinefringeokn,
+                  declinesecondwkd,
+                  declinefamwkoffd,
+                  declinefamwkoffn)
+
+##Year-Interaction, Declining Job Outlook
+ydeclinelist1<-list(ydeclinestressd,
+                    ydeclinestressn,
+                    ydeclinesatjob1d,
+                    ydeclinesatjob1n,
+                    ydeclinehealth1d,
+                    ydeclinehealth1n,
+                    ydeclinejobsecokd)
+ydeclinelist2<-list(ydeclinejobsecokn,
+                    ydeclinefringeokd,
+                    ydeclinefringeokn,
+                    ydeclinesecondwkd,
+                    ydeclinefamwkoffd,
+                    ydeclinefamwkoffn)
+
+##Base, Decline ordinal
+declineordlist1<-list(declineordstressd,
+                  declineordstressn,
+                  declineordsatjob1d,
+                  declineordsatjob1n,
+                  declineordhealth1d,
+                  declineordhealth1n,
+                  declineordjobsecokd)
+
+declineordlist2<-list(declineordjobsecokn,
+                  declineordfringeokd,
+                  declineordfringeokn,
+                  declineordsecondwkd,
+                  declineordfamwkoffd,
+                  declineordfamwkoffn)
+
+##Year-Interaction, Computerization
+ydeclineordlist1<-list(ydeclineordstressd,
+                    ydeclineordstressn,
+                    ydeclineordsatjob1d,
+                    ydeclineordsatjob1n,
+                    ydeclineordhealth1d,
+                    ydeclineordhealth1n,
+                    ydeclineordjobsecokd)
+ydeclineordlist2<-list(ydeclineordjobsecokn,
+                    ydeclineordfringeokd,
+                    ydeclineordfringeokn,
+                    ydeclineordsecondwkd,
+                    ydeclineordfamwkoffd,
+                    ydeclineordfamwkoffn)
+```
+
+
+```{r, echo=FALSE, results='asis'}
+##Computerization, Frey-Osborne
+wordreg(computelist1,
+        file="computelist1.doc",
+       caption="Computerization and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Computerization Prob",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(computelist2,
+        file="computelist2.doc",
+       caption="Computerization and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Computerization Prob",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(ycomputelist1,
+       caption="Year Interaction, Computerization and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Computerization Prob", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Compute x 2010",
+                             "Compute x 2018"))
+texreg(ycomputelist2,
+       caption="Year Interaction, Computerization and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Computerization Prob", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Compute x 2010",
+                             "Compute x 2018"))
+
+##Webb-Software
+wordreg(softwarelist1,
+       file="softwarelist1.doc",
+       caption="Webb-Software Percentile and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "WebbSoftwarePct",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(softwarelist2,
+        file="softwarelist2.doc",
+       caption="Webb-Software Percentile and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "WebbSoftwarePct",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(ysoftwarelist1,
+       caption="Year Interaction, Webb-Software Percentile and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "WebbSoftwarePct", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Software Pct x 2010",
+                             "Software Pct x 2018"))
+texreg(ysoftwarelist2,
+       caption="Year Interaction, Webb-Software Percentile and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "WebbSoftwarePct", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Software Pct x 2010",
+                             "Software Pct x 2018"))
+
+##Webb-Robot
+wordreg(robotlist1,
+        file="robotlist1.doc",
+       caption="Webb-Robot Percentile and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "WebbRobotPct",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(robotlist2,
+        file="robotlist2.doc",
+       caption="Webb-Robot Percentile and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "WebbRobotPct",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(yrobotlist1,
+       caption="Year Interaction, Webb-Robot Percentile and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "WebbRobotPct", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Robot Pct x 2010",
+                             "Robot Pct x 2018"))
+texreg(yrobotlist2,
+       caption="Year Interaction, Webb-Robot Percentile and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "WebbRobotPct", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Robot Pct x 2010",
+                             "Robot Pct x 2018"))
+
+##Webb-AI
+wordreg(ailist1,
+        file="ailist1.doc",
+       caption="Webb-AI Percentile and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "WebbAI Pct",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(ailist2,
+        file="ailist2.doc",
+       caption="Webb-AI Percentile and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "WebbAI Pct",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(yailist1,
+       caption="Year Interaction, Webb-AI Percentile and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "WebbAIPct", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "AI Pct x 2010",
+                             "AI Pct x 2018"))
+texreg(yailist2,
+       caption="Year Interaction, Webb-AI Percentile and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "WebbAIPct", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "AI Pct x 2010",
+                             "AI Pct x 2018"))
+
+##KO-Ratio
+wordreg(kolist1,
+        file="kolist1.doc",
+       caption="Capital-Output Ratio and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Capital-Output Ratio",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(kolist2,
+        file="kolist2.doc",
+       caption="Capital-Output Ratio and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Capital-Output Ratio",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(ykolist1,
+       caption="Year Interaction, Capital-Output Ratio and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Capital-Output Ratio", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work",
+                             "Capital-Output x 2010",
+                             "Capital-Output x 2018"))
+texreg(ykolist2,
+       caption="Year Interaction, Capital-Output Ratio and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Capital-Output Ratio", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work",
+                             "Capital-Output x 2010",
+                             "Capital-Output x 2018"))
+
+##KL-Ratio
+wordreg(kllist1,
+        file="kllist1.doc",
+       caption="Capital-Labor Ratio and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Capital-Labor Ratio",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(kllist2,
+        file="kllist2.doc",
+       caption="Capital-Labor Ratio and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Capital-Labor Ratio",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(ykllist1,
+       caption="Year Interaction, Capital-Labor Ratio and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Capital-Labor Ratio", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work",
+                             "Capital-Labor x 2010",
+                             "Capital-Labor x 2018"))
+texreg(ykllist2,
+       caption="Year Interaction, Capital-Labor Ratio and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Capital-Labor Ratio", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work",
+                             "Capital-Labor x 2010",
+                             "Capital-Labor x 2018"))
+
+##Declining Job Outlook
+wordreg(declinelist1,
+        file="declinelist1.doc",
+       caption="Declining Job Outlook Binary and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Binary",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(declinelist2,
+        file="declinelist2.doc",
+       caption="Declining Job Outlook Binary and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Binary",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(ydeclinelist1,
+       caption="Year Interaction, Declining Job Outlook Binary and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Binary", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Declining x 2010",
+                             "Declining x 2018"))
+texreg(ydeclinelist2,
+       caption="Year Interaction, Declining Job Outlook Binary and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Binary", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Declining x 2010",
+                             "Declining x 2018"))
+
+##Declining Job Outlook, Ordinal
+wordreg(declineordlist1,
+        file="declineordlist1.doc",
+       caption="Declining Job Outlook Ordinal and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Ordinal",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+wordreg(declineordlist2,
+        file="declineordlist2.doc",
+       caption="Declining Job Outlook Ordinal and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Ordinal",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work"))
+
+texreg(ydeclineordlist1,
+       caption="Year Interaction, Declining Job Outlook Ordinal and Job Quality",
+       custom.model.names=c("StressD", "StressN", "JobSatD", "JobSatN",
+                     "HealthD", "HealthN", "JobSecD"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Ordinal", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Declining x 2010",
+                             "Declining x 2018"))
+texreg(ydeclineordlist2,
+       caption="Year Interaction, Declining Job Outlook Ordinal and Job Quality",
+       custom.model.names=c("JobSecN", "FringeD", "FringeN", "SecJobD",
+                     "TimeOffD", "TimeOffN"),
+       custom.coef.names = c("Intercept", "Declining Outlook, Ordinal", 
+                             "Year2010", "Year2018",
+                             "Income", "Black", "Female", 
+                             "College degree", "Full-time work", 
+                             "Declining x 2010",
+                             "Declining x 2018"))
+```

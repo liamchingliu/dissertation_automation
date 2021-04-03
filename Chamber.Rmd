@@ -1,0 +1,239 @@
+---
+title: "Chamber"
+author: "Larry Liu"
+date: "2/12/2021"
+output: pdf_document
+---
+
+```{r}
+library(rvest)
+library(dplyr)
+library(quanteda)
+library(stm)
+library(stringr)
+```
+##Chamber of Commerce
+
+```{r}
+##get urls
+##scraped Feb. 12, 2021
+chamberbase<-"https://www.uschamber.com/search/site/automation?page="
+chambernrs<-1:19
+chamberurl<-paste0(chamberbase,chambernrs)
+chamberurl<-c(chamberurl, "https://www.uschamber.com/search/site/automation")
+
+url<-"https://www.uschamber.com/search/site/automation?page=1"
+##build paperlinks
+getPaperLinksChamber<-function(url){
+  Sys.sleep(0.5)
+  getlink<-read_html(url)%>%
+    html_nodes('div [class="results-container"]')%>%
+    html_nodes('a')%>%
+    html_attr("href")
+  getlink<-getlink[1:10]
+  return(getlink)
+}
+
+linkvectorchamber<-unlist(lapply(chamberurl, getPaperLinksChamber))
+
+##build text scraper
+url1<-"https://www.uschamber.com/2021-state-of-american-business-industry-perspectives/professional-services"
+getTextChamber<-function(url){
+  chambertext<-read_html(url)%>%
+    html_nodes('div [class="content-section"]')%>%
+    html_nodes('p')%>%
+    html_text(trim=TRUE)
+  chambertext1<-str_trim(chambertext)
+  chambertext1<-paste(chambertext1, collapse="\n\n")
+  chamberdata<-data.frame(text=chambertext1)
+  return(chamberdata)
+}
+chambertext1<-getTextChamber(linkvectorchamber[37])
+
+##implement getText
+chamberdata1<-data.frame()
+for(url in linkvectorchamber){
+  tryCatch(
+    expr={
+      chambertextdata<-getTextChamber(url)
+      chamberdata1<-rbind(chamberdata1, chambertextdata)
+    },
+    error=function(e){
+      print(e)
+      print(url)
+    }
+  )
+}
+save(chamberdata1, file="chamberdata.Rdata")
+```
+
+```{r}
+##reload data
+load("chamberdata.RData")
+##add doc_id
+chamberdata1<-chamberdata1 %>% mutate(doc_id = row_number())
+##convert to corpus
+chambercorpus<-corpus(chamberdata1,
+                      text_field="text",
+                      docid_field="doc_id")
+
+##document-feature matrix
+dfm_chamber<-texts(chambercorpus)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  #tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  dfm(verbose=T)
+
+docvars(dfm_chamber, "texts")<-texts(chambercorpus)
+
+##convert to stm format
+stm_dfmchamber<-convert(dfm_chamber, to="stm")
+short_text<-sapply(stm_dfmchamber$meta$texts, str_trunc, 1000)
+
+##fit 20 topic models
+stm_fit20chamber<-stm(stm_dfmchamber$documents, stm_dfmchamber$vocab,
+               K=20,  init.type = "Spectral",
+               max.em.its = 500, reportevery = 50L, emtol = 0.00001, 
+               verbose=T)
+##labeltopics
+labelTopics(stm_fit20chamber)
+##findthoughts
+findThoughts(stm_fit20chamber, texts=short_text, topics=18, n=3)
+##plot summary
+plot(stm_fit20chamber, type="summary",
+     main="20 Topic Model of Chamber of Commerce Automation Talk, N=192",
+     topics=c(11,18,4,7,6,10,12,13,15),
+     custom.labels = c("Trade Agreement,manuf.jobs",
+                       "Border security, Travel/trade",
+                       "Autonomous vehicles, transportation",
+                       "Blockchain",
+                       "Privacy law, consumer protection",
+                       "Chamber membership",
+                       "Cybersecurity, intellectual property",
+                       "Small businesses",
+                       "Internet of things, facial recognition"))
+
+```
+
+##AFL-CIO
+
+```{r}
+##get page links
+##March 9, 2021
+aflbase<-"https://aflcio.org/search?s=automation"
+aflnrs<-1:6
+aflpage<-"&page="
+aflurl<-paste0(aflbase, aflpage,aflnrs)
+aflurl<-c(aflbase, aflurl)
+
+##create function to get urls
+getPaperLinksAFL<-function(url){
+  Sys.sleep(0.5)
+  gettext<-read_html(url)%>%
+    html_nodes('div [id="search-results"]')%>%
+    html_nodes('a')%>%
+    html_attr("href")
+  gettext<-gettext[1:10]
+  return(gettext)
+}
+
+##apply
+linkvectorafl<-unlist(lapply(aflurl, getPaperLinksAFL))
+linkvectorafl<-unique(linkvectorafl)
+linkvectorafl<-linkvectorafl[-c(65:66)]##not applicable links
+linkvectorafl<-linkvectorafl[-1]##external article filtered out
+##attach root URL back in
+aflroot<-"https://aflcio.org"
+linkvectorafl1<-paste0(aflroot,linkvectorafl)
+
+tryafl<-"https://aflcio.org/about/leadership/statements/service-capt-tim-canoll"
+
+##build function to get text
+getTextAFL<-function(url){
+  textafl<-read_html(url)%>%
+    html_nodes('div [id="block-afl-content"]')%>%
+    html_nodes('p')%>%
+    html_text
+  textafl1<-paste(textafl, collapse="\n\n")
+  textafl2<-data.frame(text=textafl1)
+  return(textafl2)
+}
+
+##implement get text function
+afldata1<-data.frame()
+for(url in linkvectorafl1){
+  tryCatch(
+    expr={
+      afltextdata<-getTextAFL(url)
+      afldata1<-rbind(afldata1, afltextdata)
+    },
+    error=function(e){
+      print(e)
+      print(url)
+    }
+  )
+}
+
+##export data
+save(afldata1, file="afldata.RData")
+```
+
+```{r}
+##reload data
+load("afldata.RData")
+##add doc_id
+afldata1<-afldata1%>%mutate(doc_id=row_number())
+
+##convert to corpus
+aflcorpus<-corpus(afldata1,
+                  text_field="text",
+                  docid_field="doc_id")
+##document feature matrix
+dfm_afl<-texts(aflcorpus)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  #tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  dfm(verbose=T)
+
+##add texts back to dfm
+docvars(dfm_afl,"texts")<-texts(aflcorpus)
+##convert to stm format
+stm_dfmafl<-convert(dfm_afl, to="stm")
+short_afltext<-sapply(stm_dfmafl$meta$texts, str_trunc, 1000)
+
+##fit 20 topic models
+stm_fit20afl<-stm(stm_dfmafl$documents, stm_dfmafl$vocab,
+                  K=20, init.type = "Spectral",
+                  max.em.its = 500, reportevery = 50L, emtol = 0.00001, 
+                  verbose=T)
+##labeltopics
+labelTopics(stm_fit20afl,
+            topics=c(19, 5, 2, 9, 3, 7, 15))
+##findthoughts
+findThoughts(stm_fit20afl, texts=short_afltext, topics=15, n=3)
+
+##plot summary
+plot(stm_fit20afl, type="summary",
+     topics=c(19, 5, 2, 9, 3, 7, 15),
+     main="20 Topic Model of AFL-CIO Automation Talk, N=63",
+     custom.labels = c("Workers, Raising wages",
+                       "Labor movement",
+                       "Future of work commission",
+                       "Amtrak, Delta, Transport",
+                       "Technology, productivity, worker share",
+                       "NAFTA trade deal",
+                       "Manufacturing"))
+```
+

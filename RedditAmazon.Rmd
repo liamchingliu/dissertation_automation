@@ -1,0 +1,388 @@
+---
+title: "RedditAmazon"
+author: "Larry Liu"
+date: "March 19, 2020"
+output: pdf_document
+---
+
+The data is from January 25, 2018 until Feb 13, 2020.
+
+```{r, warning=FALSE, message=FALSE}
+library(quanteda)
+library(stm)
+library(dplyr)
+library(xtable)
+library(stringr)
+library(syuzhet)
+library(sentimentr)
+library(psych)
+library(ggplot2)
+library(igraph)
+setwd("/Volumes/LARRY LIU/icloud drive/Automation Retail Project")
+```
+
+```{r}
+##load dataset
+amazonfc<-read.csv("amazonfc.csv")
+fascamazon<-read.csv("fascamazon.csv")
+##merge
+amazon<-rbind(amazonfc, fascamazon)
+
+##create date https://stackoverflow.com/questions/11233960/converting-from-utc-into-date-format-in-r 
+amazon<-amazon%>%
+  mutate(date1=as.Date(.POSIXct(created_utc, tz="utc")),
+         date2=as.factor(format(as.Date(date1), "%Y-%m")))
+##add id column
+amazon$doc_id<-1:nrow(amazon)
+
+##convert text to character
+amazon$text<-as.character(amazon$text)
+```
+
+Convert to corpus using quanteda
+
+```{r}
+##convert to corpus
+amazoncorpus<-corpus(amazon,
+                     text_field="text",
+                     docid_field = "doc_id")
+metaamazoncorpus<-metacorpus(amazoncorpus)
+
+#kwic for automat*
+kwicauto<-kwic(tokens(amazoncorpus), "automat*", window=5)
+kwicauto
+##filter out automatic and automatically
+kwicauto1<-kwicauto%>%
+  dplyr::filter(!keyword %in% c("automatic", "automatically", "Automatic",
+                                "Automatically"))
+#kwic for technolog*
+kwictech<-kwic(tokens(amazoncorpus), "technolog*", window=5)
+kwictech
+
+#kwic for scanner
+kwicscanner<-kwic(tokens(amazoncorpus), "scanner", window=5)
+kwicscanner
+```
+#amazon$text[amazon$doc_id=='63']
+"Why is this job not automated?I work at a delivery station. All we do is sort packages from pallets into bins. I feel like a total meat robot. There really isn't anything I do that couldn't be easily automated."
+#amazon$text[amazon$doc_id=='1831']
+"I was just thinking this. How is it cheaper for humans to  do all that we do. Definitely the sortation centers. The only problem I could see is getting boxes out of trucks. But after that, everything could automated, from the moment the order is placed to the boxes being sorted and shipped. I guess technology isn't advanced enough is my guess (or too expensive)"
+#amazon$text[amazon$doc_id=='20994']
+"Save your energy. In a few years those jobs will be gone and will be automated away anyways. Amazon isn't gonna care."
+```{r}
+##Document feature matrix
+dfm_amazon<-texts(amazoncorpus)%>%
+  char_tolower()%>%
+  tokens()%>%
+  tokens_select(stopwords('english'), selection='remove')%>%
+  tokens_select(c("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+                  "p","q","r","s","t","u","v","w","x","y","z"), 
+                selection='remove')%>%
+  tokens_wordstem()%>%
+  tokens_select(pattern='[:punct:]', selection='remove', valuetype='regex')%>%
+  tokens_ngrams(n=c(1,2))%>%
+  dfm(verbose=T)
+
+##remove features that occur in less than 1% of documents
+dfm_amazon<-dfm_trim(dfm_amazon, min_docfreq=0.01, max_docfreq=0.8, docfreq_type="prop", verbose=TRUE)
+
+##subset dfm: get rid of empty documents
+##https://github.com/quanteda/quanteda/issues/1647
+dfm_amazondrop<-dfm_subset(dfm_amazon, ntoken(dfm_amazon)>0)
+amazoncorpusdrop<-texts(amazoncorpus)[docnames(dfm_amazondrop)]
+
+##convert to STM
+amazon_stm<-convert(dfm_amazon, to="stm")
+
+##choosing number of topics (K)
+numberk<-searchK(amazon_stm$documents, amazon_stm$vocab, K=c(15,20,25,30,35,40),
+                 data=amazon_stm$meta)
+plot(numberk)
+
+##fit 20 topics
+stm_fit20<-stm(amazon_stm$documents, amazon_stm$vocab, K=20,
+               init.type = "Spectral",  max.em.its = 500, reportevery = 50L, 
+               emtol = 0.00001, verbose=T)
+##print the labels
+labelTopics(stm_fit20)
+##plot the labels
+#basic
+plot(stm_fit20, type="summary", n=3, xlim = c(0,.2), 
+     topics=c(5,6,7,8,11,12,14,16,17,20))
+#with new labels
+plot(stm_fit20, type="summary", n=1, xlim = c(0,.15), 
+     topics=c(5,6,7,8,11,12,14,16,17,20), 
+     topic.names=c("blue badge","getting paid","manager","start/ orientation", 
+                   "UPT/ PTO","make rate","medical leave","training","termination",
+                   "benefits"), custom.labels = c(""),
+     main="20 Topic Model of Amazon Workers on Reddit, N=28,304")
+```
+```{r}
+##Topic model for K=30
+stm_fit30<-stm(amazon_stm$documents, amazon_stm$vocab, K=30,
+               init.type = "Spectral",  max.em.its = 500, reportevery = 50L, 
+               emtol = 0.00001, verbose=T)
+
+##plot
+plot(stm_fit30, type="summary", n=3)
+plot(stm_fit30, type="summary", n=3,
+     topics=c(5,6,7,8,11,12,14,16,17,20,25,28), 
+     topic.names=c("blue badge","getting paid","manager","start/ orientation", 
+                   "vacation/unpaid absence","make rate",
+                   "medical leave","training","termination",
+                   "benefits","early dismissal/extra shift","schedules"), 
+     custom.labels = c(""),
+     main="30 Topic Model of Amazon Workers on Reddit, N=28,304",
+     xlim = c(0,.08))
+labelTopics(stm_fit30)
+```
+
+
+```{r}
+##findthoughts
+short_textamazon<-sapply(amazoncorpusdrop, str_trunc, 1000)
+thought5<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=5)
+thought6<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=4,
+                       topics=6)
+thought7<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=7)
+thought8<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=8)
+thought11<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=11)
+thought12<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=12)
+thought14<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=14)
+thought16<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=16)
+thought17<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=17)
+thought20<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=20)
+thought25<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=6,
+                       topics=25)
+thought28<-findThoughts(stm_fit30,
+                       texts=short_textamazon,
+                       n=2,
+                       topics=28)
+```
+
+
+Topic 5, "blue badge": 
+ 	 You have to apply to convert, and there's more requirements for blue badge over white badge
+ 	Blue badge bonus?Is it true that blue badges get $500 bonus after 90 days from converting to blue badge?
+ 	
+Topic 6, "getting paid": 
+ 	 I could be wrong, but it's been my experience that T1's get paid weekly. T3's get paid every other week. T4's and up get paid once a month. That's how it is where I am working.
+ 	Meaning that he would get paid next pay period rather then this pay period?
+ 	
+Topic 7, "manager": 
+ 	 Internal Area Manager Internship.Have any internals who are pursuing degrees been nominated or recommended for Area Manager Internships?
+ 	L4/L5 are area managers, not assistant managers. PA's or Shift Assistants (T/L3's) are more so considered assistant managers.
+
+Topic 8,"start/ orientation": 
+ 	 Did you consent to a background check? I had to consent to the background check, then a week later I was sent an offer letter, which had a start date of two weeks after that.
+ 	 Mine was from recruiting-systems-prod@amazon I was supposed to receive an email from MyDocs-noreply@onbaseonline following a clean drug test with instructions on new hire paperwork. 	
+
+Topic 11, "vacation/unpaid absence": 
+ 	 Vacation question.How long does it normally take for vacation to get approved? I put it in just now(10pm) and its for the 2nd of October and the 7th of October. I used my PTO [paid time off] but I didnt have enough so I used my vacation with my pto.
+ 	Is it during your regular shift? Unless you're using vacation or pto, no. It'll use your upt [unpaid time off]. 
+ 	
+Topic 12,"make rate": 
+ 	 Im not sure. i am sure they deadlines and goals to meet. Not sure if it is measured as intensely as production
+ 	The expected rate increases every 40 hours until you hit 120 hours. It's only at that point that you're expected to make rate
+ 	
+Topic 14,"medical leave": 
+ 	 How can I take a leave?If I remember I  can either take personal leave or medical leave. Can someone help me out with this? I might need to go to the ER to have something removed (&gt;!infected cyst!&lt;) and wondering If I take personal leave can I just request it and be granted immediately or if I request for medical leave what proof do I need to have just so they can approve it. I'm only part time working Sat. and Sun. so I don't know how this whole thing work. You'd need a doc to do a medical leave of absence- personal leave can be done on your own.
+  I'd suggest you look into medical accommodation. I have a coworker with anxiety that has a hefty tot allowance.
+
+Topic 16,"training": 
+ 	 ICQA: We can't fix stupid. We fix what stupid does.ICQA: One department to rule them all, One department to find them. One department to bring them all... and in the darkness bind them.
+ 	Problem solve fixes problems.... lol. Basically depends on the department. OB will go retrieve items that need to go out that pickers reject, deal with damaged items, misprinted labels, etc etc. 
+
+Topic 17,"termination": 
+ 	 Do you get terminated at 6 points or if you go over 6 points?Just curious to know this.
+ 	Is 6 points automatic termination, or is it possible to just get a warning and no termination provided you do not go over that?.
+
+Topic 20, "benefits": 
+ 	 Out of curiosity, it's 2% match for 4% total? Or 2% for 4% match in each category (Pre-tax/Roth)? I'm also doing 4%, but spread out 2% and 2%. Tier 3 or level 3?
+I'm an EC as well. I'm level 3 in OpsTechIT's system, but Tier 1 as an associate.
+
+Topic 25,"Early dismissal/extra shift":
+To the tune of country roads:.🎶Take me home
+VTO [Voluntary Time Off/ Early dismissal]
+to the place
+I belong
+Fast asleep
+On my couch
+Take me home
+VTO🎶.
+ 	VET [Voluntary extra time] notifications out of order or not showing up in the hub right away.Im kinda bummed but i know i will survive. First thing was saw a VET for monday so i click on the link, log into the hub only to not be able to find that VET at all. So i give it a few refresh nope still nothing there under VET , finally it shows and i get it but its not for the day the first text notification i saw said it was for. 
+why does the VET in the hub not show up in order ?
+
+Topic 28, "schedules": 
+ 	 During peak, everyone does overtime. So those who normally do four 10 hour shifts, would normally go up to six 10 hour shifts, and those doing three 12 hour shifts, would go up to five 12 hour shifts. Both would be total of 60 hours for the week. As of now this peak, those doing four 10 hour shifts, will go up to five 11 hour shifts, and those doing three 12 hour shifts will go to five 11 hour shifts. Both doing 55 hours.
+ 	Typically it's the length of a regular shift so if 8 hours then 8, if 10 hours then 10.
+ 	
+Topic Correlation
+```{r}
+##create labels
+amazon_frex<-labelTopics(stm_fit30, n=2)$frex
+amazon_frex<-apply(amazon_frex, 1, paste, collapse="\n")
+##use topicCorr
+amazon_corr<-topicCorr(stm_fit30)
+plot(amazon_corr, vlabels=amazon_frex, vertex.label.cex=.5, vertex.size=30,
+     vertex.color="light gray")
+```
+
+Wordcloud
+```{r}
+##print wordcloud
+cloud(stm_fit30, topic=5)
+cloud(stm_fit30, topic=6)
+cloud(stm_fit30, topic=7)
+cloud(stm_fit30, topic=8)
+cloud(stm_fit30, topic=11)
+cloud(stm_fit30, topic=12)
+cloud(stm_fit30, topic=14)
+cloud(stm_fit30, topic=16)
+cloud(stm_fit30, topic=17)
+cloud(stm_fit30, topic=20)
+cloud(stm_fit30, topic=25)
+cloud(stm_fit30, topic=28)
+```
+
+
+```{r}
+##stm with time covariates
+docvars(dfm_amazon, "date2")<-amazoncorpus$date2
+docvars(dfm_amazon, "text")<-amazoncorpus$text
+docvars(dfm_amazon, "subreddit")<-amazoncorpus$subreddit
+
+##convert quanteda dfm to stm
+amazon_stm1<-convert(dfm_amazon, to="stm")
+
+##fit stm with covariates: time
+stm_fit30cov<-stm(amazon_stm1$documents,
+                  amazon_stm1$vocab,
+                  prevalence= ~subreddit+date2,
+                  K=30,
+                  data=amazon_stm1$meta,
+                  init.type="Spectral",
+                  max.em.its=500,
+                  reportevery=50L,
+                  emtol=0.00001,
+                  verbose=TRUE)
+#Error in makeTopMatrix(prevalence, data) : Error creating model matrix.
+#                 This could be caused by many things including
+#                 explicit calls to a namespace within the formula.
+#                 Try a simpler formula.
+
+##estimate effect
+subreddit_fit<-estimateEffect(c(1:30) ~subreddit,
+                              stm_fit30cov,
+                              meta=amazon_stm1$meta,
+                              uncertainty="Global")
+
+##baseline plot
+plot(stm_fit30cov, type="summary", n=3, xlim = c(0,.2), 
+     topics=c(5,6,7,8,11,12,14,16,17,20,25,28))
+##plot subreddit topic model
+plot.estimateEffect(subreddit_fit,
+                    covariate="subreddit",
+                    n=3,
+                    verbose.labels = F,
+                    model=stm_fit30cov,
+                    topics=c(5,6,7,8,11,12,14,16,17,20,25,28),
+                    method="difference",
+                    cov.value1 = "AmazonFC", cov.value2 = "FASCAmazon",
+                    labeltype="custom",
+                    custom.labels = c("blue badge","getting paid","manager",
+                                      "start/ orientation", 
+                                      "vacation/unpaid absence",
+                                      "make rate","medical leave",
+                                      "training","termination",
+                                      "benefits",
+                                      "Early dismissal/extra shift","schedules"),
+                    xlab="FASCAmazon<------>AmazonFC",
+                    main="Comparison of topics between two Subreddits, N=28,304",
+                    xlim=c(-0.015, 0.015))
+```
+```{r}
+##NOT USED
+##time covariate
+year_fit<-estimateEffect(c(7)~date2,
+                         stm_fit30cov,
+                         meta=amazon_stm1$meta,
+                         uncertainty="Global")
+plot.estimateEffect(year_fit,
+                    covariate="date2",
+                    topics=c(7),
+                    model=stm_fit30cov,
+                    method="pointestimate",
+                    verbose.labels = F)
+```
+
+Sentiment Analysis
+
+```{r}
+##Syuzhet method
+#https://www.rdocumentation.org/packages/syuzhet/versions/1.0.4/topics/get_sentiment
+amazon$sentiment1<-get_sentiment(amazon$text)
+
+##Polarity score, sentimentr
+#https://www.rdocumentation.org/packages/sentimentr/versions/2.7.1/topics/sentiment_by
+amazon$sentiment2<-sentiment_by(amazon$text)
+
+##CDF of sentiment
+ggplot(data=amazon, aes(x=amazon$sentiment1))+
+  stat_ecdf(geom="step", pad=FALSE)+
+  geom_vline(xintercept=mean(amazon$sentiment1), color="red")+
+  labs(x="Syuzhet Sentiment", y="CDF")
+ggplot(data=amazon, aes(x=amazon$sentiment2$ave_sentiment))+
+  stat_ecdf(geom="step", pad=FALSE)+
+  geom_vline(xintercept=mean(amazon$sentiment2$ave_sentiment), color="red")+
+  labs(x="Polarity Score Sentiment", y="CDF")
+
+##plot over time
+plot(y=amazon$sentiment1,
+     x=amazon$date2,
+     xlab="Time",
+     ylab="Syuzhet Sentiment")
+plot(y=amazon$sentiment2$ave_sentiment,
+     x=amazon$date2,
+     xlab="Time",
+     ylab="Polarity Score Sentiment")
+
+##earlier date with more positive sentiment, i.e. sentiment declines 
+##slightly over time
+sentiment1_fit<-lm(sentiment1~date1, data=amazon)
+summary(sentiment1_fit)
+sentiment2_fit<-lm(sentiment2$ave_sentiment~date1, data=amazon)
+summary(sentiment2_fit)
+```
+
